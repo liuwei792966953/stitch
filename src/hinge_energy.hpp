@@ -6,6 +6,7 @@
 #include "mesh.hpp"
 
 
+/*
 // A hinge-based bending energy
 //
 class HingeEnergy : public Energy {
@@ -209,5 +210,6 @@ std::vector<std::shared_ptr<Energy>> get_edge_energies(TriMesh& mesh) {
 
     return energies;
 }
+*/
 
 

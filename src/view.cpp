@@ -1,3 +1,5 @@
+// Copyright (C) 2019 David Harmon and Artificial Necessity
+// This code distributed under zlib, see LICENSE.txt for terms.
 
 #include <clara.hpp>
 #include <igl/readOBJ.h>
@@ -5,6 +7,7 @@
 
 #include "admm_integrator.hpp"
 #include "energy.hpp"
+#include "triangle_energies.hpp"
 #include "hinge_energy.hpp"
 #include "mesh.hpp"
 
@@ -153,10 +156,6 @@ int main(int argc, char *argv[])
     }
 
 
-    Lame very_soft_rubber(1000000,0.1);
-    //very_soft_rubber.limit_min = 0.95;
-    //very_soft_rubber.limit_max = 1.05;
-
     for (int i=0; i<sim_mesh.f.rows(); i++) {
         std::vector<Eigen::Vector3d> xs;
         for (int j=0; j<3; j++) {
@@ -167,7 +166,7 @@ int main(int argc, char *argv[])
                 xs.push_back(sim_mesh.x.segment<3>(3*sim_mesh.f(i,j)));
             }
         }
-        admm.energies.push_back(std::make_shared<TriEnergy>(sim_mesh.f.row(i), xs, very_soft_rubber));
+        admm.energies.push_back(std::make_shared<TriangleOrthoStrain>(sim_mesh.f.row(i), xs, 1000000));
     }
 
     //auto bend_energies = get_edge_energies(sim_mesh);

@@ -1,3 +1,6 @@
+// Copyright (C) 2019 David Harmon and Artificial Necessity
+// This code distributed under zlib, see LICENSE.txt for terms.
+
 #include "admm_integrator.hpp"
 
 #include "timer.hpp"
@@ -7,10 +10,20 @@ void ADMM_Integrator::initialize(const SimMesh& mesh, double dt) {
     std::vector<Eigen::Triplet<double>> triplets;
     std::vector<double> weights;
     for (const auto& energy : energies) {
-        energy->get_reduction(triplets, weights);
+        std::vector<Eigen::Triplet<double>> ts;
+        energy->get_reduction(ts);
+
+        for (const auto& t : ts) {
+            triplets.push_back(Eigen::Triplet<double>(t.row() + weights.size(), t.col(), t.value()));
+        }
+
+        energy->set_index(weights.size());
+        std::fill_n(std::back_inserter(weights), energy->dim(), energy->weight());
+
     }
 
     u_ = Eigen::VectorXd::Zero(weights.size());
+    z_ = Eigen::VectorXd::Zero(weights.size());
 
     // Create the Selector+Reduction matrix
     D_.resize(weights.size(), mesh.x.rows());
@@ -132,8 +145,10 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
         // Explicit step forward by dt
         Eigen::VectorXd x_curr = mesh.x + cg_.filter(mesh.v * dt);
 
-        // Replace this with a per-element reduction
-        z_ = D_ * mesh.x;
+        #pragma omp parallel for
+        for (size_t i=0; i<energies.size(); i++) {
+            z_.segment(energies[i]->index(), energies[i]->dim()) = energies[i]->reduce(mesh.x);
+        }
 
         // Element-wise multiplication (m.asDiagonal() * x_curr would also work)
         const Eigen::VectorXd Mx = mesh.m.array() * x_curr.array();
@@ -144,7 +159,14 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
         for (int iter=0; iter<nbr_internal_iters; iter++) {
             #pragma omp parallel for
             for (size_t i=0; i<energies.size(); i++) {
-	        energies[i]->update(D_, x_curr, z_, u_);
+                const auto& energy = energies[i];
+
+                Eigen::VectorXd Dix = energy->reduce(x_curr);
+                Eigen::VectorXd zi = Dix + u_.segment(energy->index(), energy->dim());
+                energy->project(zi);
+
+                u_.segment(energy->index(), energy->dim()).noalias() += Dix - zi;
+                z_.segment(energy->index(), energy->dim()).noalias() = zi;
 	    }
 
 	    const Eigen::VectorXd b = Mx + DtWtW_ * (z_ - u_);
