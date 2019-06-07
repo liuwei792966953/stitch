@@ -6,7 +6,7 @@
 #include "timer.hpp"
 
 
-void ADMM_Integrator::initialize(const SimMesh& mesh, double dt) {
+void ADMM_Integrator::initialize(const TriMesh& mesh, double dt) {
     std::vector<Eigen::Triplet<double>> triplets;
     std::vector<double> weights;
     for (const auto& energy : energies) {
@@ -56,7 +56,7 @@ void ADMM_Integrator::initialize(const SimMesh& mesh, double dt) {
 }
 
 
-void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double kd, double mu) {
+void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double kd, double mu) {
         const Eigen::Vector3d gravity(0.0, -98.0, 0.0);
 
         if (DtWtW_.rows() != mesh.x.rows()) {
@@ -71,14 +71,16 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
         for (int i=0; i<mesh.v.size() / 3; i++) {
             mesh.v.segment<3>(3*i) += gravity * dt;
         }
-
+        
         if (avatar) {
             cg_.reset();
 
             #pragma omp parallel for
             for (int i=0; i<mesh.x.size() / 3; i++) {
+                const double offset = 0.2;
+
                 Collision c;
-                c.dx = 0.05;
+                c.dx = offset;
 
                 avatar->bvh.visit(mesh.x.segment<3>(3*i),
                         [&](int idx) {
@@ -97,6 +99,7 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
                                 c.dx = dist;
                                 c.tri_idx = idx;
                                 c.n = n;
+                                c.w = w.transpose();
                             }
                             }
                         });
@@ -108,8 +111,8 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
                 }
 
                 if (c.tri_idx != -1) {
-                    if (c.dx < 0.0) { c.dx = 0.01 - c.dx; }
-                    else { c.dx = 0.8 * (0.05 - c.dx); }
+                    if (c.dx < 0.0) { c.dx = 0.1 * offset - c.dx; }
+                    else { c.dx = 0.8 * (offset - c.dx); }
 
                     collisions_[i] = c;
                 }
@@ -118,6 +121,15 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
                     const Eigen::Vector3d& n = collisions_[i].n;
                     mesh.x.segment<3>(3*i) += n * collisions_[i].dx;
                     cg_.setFilter(i, Eigen::Matrix3d::Identity() - n * n.transpose());
+
+                    Eigen::Vector3d avatar_vel = Eigen::Vector3d::Zero();
+                    for (int j=0; j<3; j++) {
+                        avatar_vel.noalias() += avatar->v.segment<3>(3*avatar->f(collisions_[i].tri_idx,j)) * collisions_[i].w[j];
+                    }
+
+                    mesh.v.segment<3>(3*i) -= n * (mesh.v.segment<3>(3*i) - avatar_vel).dot(n);
+
+
                     collisions_[i].dx = 0.0;
 
                     const double mag = dx_.segment<3>(3*i).dot(n);
@@ -130,7 +142,8 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
                         const double vt_mag = vt.norm();
 
                         if (vt_mag < mu * dv_max) {
-                            mesh.v.segment<3>(3*i) -= vt;
+                            mesh.v.segment<3>(3*i) = avatar_vel;
+                            //mesh.v.segment<3>(3*i) -= vt;
                             cg_.setFilter(i, Eigen::Matrix3d::Zero());
                         } else {
                             const Eigen::Vector3d t = vt / vt_mag;
@@ -143,7 +156,7 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
         }
 
         // Explicit step forward by dt
-        Eigen::VectorXd x_curr = mesh.x + cg_.filter(mesh.v * dt);
+        Eigen::VectorXd x_curr = mesh.x + mesh.v * dt;
 
         #pragma omp parallel for
         for (size_t i=0; i<energies.size(); i++) {
@@ -172,6 +185,7 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
 	    const Eigen::VectorXd b = Mx + DtWtW_ * (z_ - u_);
 
 	    cg_.solve(A_, b, x_curr);
+
 	    //x_curr = ldlt_.solve(Mx + DtWtW_ * (z_ - u_));
             //std::cout << "\t" << x_curr.head<3>().transpose() << std::endl;
 
@@ -181,6 +195,11 @@ void ADMM_Integrator::step(SimMesh& mesh, double dt, int internal_iters, double 
         mesh.v = (x_curr - mesh.x) * (1.0 - kd) / dt;
         mesh.x = x_curr;
 
-        std::cout << "Timer: " << timer.elapsed() << std::endl;
+        const double ms = timer.elapsed();
+        std::cout << (1000.0 / ms) << " fps (" << ms << " ms)" << std::endl;
+
+        if (avatar) {
+            avatar->next_frame(dt);
+        }
     }
 

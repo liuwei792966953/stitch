@@ -16,19 +16,20 @@ class ADMM_Integrator {
 public:
     std::vector<std::shared_ptr<Energy>> energies;
 
-    void initialize(const SimMesh& mesh, double dt);
+    void initialize(const TriMesh& mesh, double dt);
 
     struct Collision {
         int tri_idx = -1;
         double dx = 0.0;
         Eigen::Vector3d n;
+        Eigen::Vector3d w;
     };
 
-    void step(SimMesh& mesh, double dt, int internal_iters, double kd, double mu);
+    void step(TriMesh& mesh, double dt, int internal_iters, double kd, double mu);
 
     void addPin(int idx) { pins_.insert(idx); }
 
-    void addAvatar(TriMesh& mesh) { avatar = &mesh; }
+    void addAvatar(AnimatedMesh& mesh) { avatar = &mesh; }
 
 protected:
     Eigen::VectorXd z_;
@@ -43,7 +44,7 @@ protected:
 
     std::vector<Collision> collisions_;
 
-    TriMesh* avatar = nullptr;
+    AnimatedMesh* avatar = nullptr;
 
     Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt_;
     ModifiedConjugateGradient cg_;

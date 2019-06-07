@@ -3,8 +3,11 @@
 
 #pragma once
 
-#include <Eigen/Core>
 #include "BVH.hpp"
+#include <Eigen/Core>
+#include <igl/readOBJ.h>
+
+#include "timer.hpp"
 
 struct TriMesh {
     Eigen::MatrixXi f;
@@ -12,13 +15,53 @@ struct TriMesh {
     Eigen::VectorXd x;
     Eigen::VectorXd vt;
 
+    Eigen::VectorXd v;
+    Eigen::VectorXd m;
+
     BVH bvh;
 
     int idx;
 };
 
-struct SimMesh : public TriMesh {
-    Eigen::VectorXd v;
-    Eigen::VectorXd m;
-};
+inline
+void load_tri_mesh(const std::string& fn, TriMesh& mesh) {
+    Eigen::MatrixXd V;
+    Eigen::MatrixXd VT;
+    Eigen::MatrixXd VN;
+    Eigen::MatrixXi FN;
 
+    igl::readOBJ(fn, V, VT, VN, mesh.f, mesh.ft, FN);
+
+    mesh.x = Eigen::VectorXd(3 * V.rows());
+    mesh.vt = Eigen::VectorXd(2 * VT.rows());
+
+    for (int i=0; i<V.rows(); i++) {
+        mesh.x.segment<3>(3*i) = V.row(i);
+    }
+
+    for (int i=0; i<VT.rows(); i++) {
+        mesh.vt.segment<2>(2*i) = VT.row(i);
+    }
+}
+
+struct AnimatedMesh : TriMesh {
+
+    void next_frame(double dt) {
+        if (curr_frame + 1 < obj_files.size()) {
+            curr_frame++;
+            
+            Eigen::VectorXd old_x = x;
+            load_tri_mesh(obj_files[curr_frame], *this);
+
+            if (!bvh.empty()) {
+                bvh.refit(f, x, 2.5, 0);
+            }
+
+            v = (x - old_x) / dt;
+        }
+    }
+    
+    std::vector<std::string> obj_files;
+
+    size_t curr_frame = 0;
+};

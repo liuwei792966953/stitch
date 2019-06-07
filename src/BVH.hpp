@@ -26,6 +26,8 @@ class BVH {
     using AABB_Vector = std::vector<Eigen::AlignedBox3d, Eigen::aligned_allocator<Eigen::AlignedBox3d>>;
 
 public:
+    bool empty() const { return bvs_.empty(); }
+
     const BV& root() const { return bvs_.front(); }
 
     void init(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h=0.0) {
@@ -121,8 +123,99 @@ public:
             }
         }
     }
+    
+    void refit(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h) {
 
+        // Find first leaf node
+        auto it = std::find_if(bvs_.begin(), bvs_.end(),
+                                [&](const BV& bv) {
+                                    return bv.data_index > 0;
+                                });
 
+        if (it == bvs_.end()) {
+            return;
+        }
+
+        size_t first_leaf = std::distance(bvs_.begin(), it);
+
+        // Refit leaves in parallel
+        #pragma omp parallel for
+        for (size_t i=first_leaf; i<bvs_.size(); i++) {
+            refit(F, x, h, int(i));
+        }
+
+        // Not in parallel, refit internal nodes. make sure we skip
+        // leaf nodes when we recurse down to them
+        refit_internal_nodes();
+    }
+
+    bool refit(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h, int idx) {
+        if (bvs_[idx].data_index == -1) {
+            return false;
+        }
+
+        bvs_[idx].aabb.setEmpty();
+
+        if (bvs_[idx].data_index > 0) {
+            // Refit around face (data_index-1)
+            for (int i=0; i<3; i++) {
+                bvs_[idx].aabb.extend(x.segment<3>(3*F(bvs_[idx].data_index-1,i)));
+            }
+
+            bvs_[idx].aabb.extend(bvs_[idx].aabb.min() - Eigen::Vector3d::Ones() * h);
+            bvs_[idx].aabb.extend(bvs_[idx].aabb.max() + Eigen::Vector3d::Ones() * h);
+        } else {
+            for (int i=0; i<2; ++i) {
+                if (refit(F, x, h, 2 * idx + 1 + i)) {
+                    bvs_[idx].aabb.extend(bvs_[2*idx+1+i].aabb);
+                }
+            }
+        }
+
+        return true;
+    }
+
+protected:
+    bool refit_internal_nodes(int idx=0) {
+        if (bvs_[idx].data_index == -1) {
+            return false;
+        }
+
+        if (bvs_[idx].data_index > 0) {
+            return true;
+        }
+
+        bvs_[idx].aabb.setEmpty();
+
+        for (int i=0; i<2; ++i) {
+            if (refit_internal_nodes(2 * idx + 1 + i)) {
+                bvs_[idx].aabb.extend(bvs_[2*idx+1+i].aabb);
+            }
+        }
+
+        return true;
+    }
+
+    /*
+    void refit_leaf_node(const Eigen::MatrixXi& F,
+                         const Eigen::VectorXd& x,
+                         double h, BV& bv) {
+        bv.aabb.setEmpty();
+        for (int i=0; i<3; i++) {
+            bv.aabb.extend(x.segment<3>(3 * F(bv.data_index-1,i)));
+        }
+
+        bv.aabb.extend(bv.aabb.min() - Eigen::Vector3d::Ones() * h);
+        bv.aabb.extend(bv.aabb.max() + Eigen::Vector3d::Ones() * h);
+    }
+
+    void refit_internal_node(int idx, BV& bv) {
+        bv.aabb.setEmpty();
+        for (int i=0; i<2; i++) {
+            bv.aabb.extend(bvs_[2*idx+1+i].aabb);
+        }
+    }
+    */
 
 protected:
     std::vector<BV> bvs_;

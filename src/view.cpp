@@ -2,19 +2,20 @@
 // This code distributed under zlib, see LICENSE.txt for terms.
 
 #include <clara.hpp>
-#include <igl/readOBJ.h>
 #include <igl/opengl/glfw/Viewer.h>
 
 #include "admm_integrator.hpp"
 #include "energy.hpp"
-#include "triangle_energies.hpp"
 #include "hinge_energy.hpp"
+#include "stitch_energy.hpp"
+#include "triangle_energies.hpp"
 #include "mesh.hpp"
 
 
 struct CLOptions {
     std::string mesh;
     std::string avatar;
+    std::string stitches;
 
     double density = 0.01;
     double friction = 0.0;
@@ -29,7 +30,8 @@ struct CLOptions {
 
 bool step(igl::opengl::glfw::Viewer& viewer,
           ADMM_Integrator& admm,
-          SimMesh& mesh,
+          TriMesh& mesh,
+          AnimatedMesh& avatar,
           double dt,
           int iterations,
           double kd,
@@ -44,6 +46,15 @@ bool step(igl::opengl::glfw::Viewer& viewer,
         }
 
         viewer.data_list[mesh.idx].set_vertices(V);
+
+        if (avatar.x.size()) {
+            V = Eigen::MatrixXd(avatar.x.size() / 3, 3);
+            for (int i=0; i<V.rows(); i++) {
+                V.row(i) = avatar.x.segment<3>(3*i);
+            }
+        
+            viewer.data_list[avatar.idx].set_vertices(V);
+        }
     }
 
     return false;
@@ -67,6 +78,9 @@ int main(int argc, char *argv[])
     auto cli
     = clara::Arg(options.mesh, "mesh")
         ("The mesh to simulate in OBJ format.")
+    | clara::Opt(options.stitches, "stitches")
+        ["-s"]["--stitches"]
+        ("A file defining the vertex-vertex stitches, one per line.")
     | clara::Opt(options.avatar, "avatar")
         ["-a"]["--avatar"]
         ("The avatar mesh in OBJ format.")
@@ -110,48 +124,43 @@ int main(int argc, char *argv[])
     ADMM_Integrator admm;
 
 
-    SimMesh sim_mesh;
+    TriMesh sim_mesh;
+    load_tri_mesh(options.mesh, sim_mesh);
 
-    Eigen::MatrixXd V;
-    Eigen::MatrixXd VT;
-    Eigen::MatrixXd VN;
-
-    Eigen::MatrixXi FN;
-
-    igl::readOBJ(options.mesh, V, VT, VN, sim_mesh.f, sim_mesh.ft, FN);
+    Eigen::MatrixXd V(sim_mesh.x.size() / 3, 3);
+    for (int i=0; i<V.rows(); i++) {
+        V.row(i) = sim_mesh.x.segment<3>(3*i);
+    }
 
     viewer.data().set_mesh(V, sim_mesh.f);
     sim_mesh.idx = viewer.data_list.size() - 1;
 
-    sim_mesh.x = Eigen::VectorXd(3 * V.rows());
-    sim_mesh.vt = Eigen::VectorXd(2 * VT.rows());
-    sim_mesh.v = Eigen::VectorXd::Zero(3 * V.rows());
-    sim_mesh.m = Eigen::VectorXd::Ones(3 * V.rows()) * 0.1;
-    for (int i=0; i<V.rows(); i++) {
-        sim_mesh.x.segment<3>(3*i) = V.row(i);
-    }
+    sim_mesh.v = Eigen::VectorXd::Zero(sim_mesh.x.rows());
+    sim_mesh.m = Eigen::VectorXd::Ones(sim_mesh.x.rows()) * 0.01;
 
-    for (int i=0; i<VT.rows(); i++) {
-        sim_mesh.vt.segment<2>(2*i) = VT.row(i);
-    }
 
-    std::cout << V.rows() << "; " << VT.rows() << std::endl;
-
-    TriMesh avatar;
+    AnimatedMesh avatar;
     if (!options.avatar.empty()) {
-        igl::readOBJ(options.avatar, V, avatar.f);
+        for (int i=1; i<122; i++) {
+            std::string nbr = std::to_string(i);
+            nbr.insert(nbr.begin(), 3 - nbr.size(), '0');
+            avatar.obj_files.push_back("/Users/dharmon/Desktop/avatar/avatar_" + nbr + ".obj");
+        }
+        load_tri_mesh(options.avatar, avatar);
+        avatar.v = Eigen::VectorXd::Zero(avatar.x.size());
+
+        Eigen::MatrixXd V(avatar.x.size() / 3, 3);
+        for (int i=0; i<V.rows(); i++) {
+            V.row(i) = avatar.x.segment<3>(3*i);
+        }
+
         Eigen::MatrixXd C = Eigen::MatrixXd::Constant(V.rows(), 3, 0.7);
         viewer.append_mesh();
         viewer.data().set_mesh(V, avatar.f);
         viewer.data().set_colors(C);
         avatar.idx = viewer.data_list.size() - 1;
 
-        avatar.x = Eigen::VectorXd(3 * V.rows());
-        for (int i=0; i<V.rows(); i++) {
-            avatar.x.segment<3>(3*i) = V.row(i);
-        }
-
-        avatar.bvh.init(avatar.f, avatar.x, 0.1);
+        avatar.bvh.init(avatar.f, avatar.x, 2.5);
         admm.addAvatar(avatar);
     }
 
@@ -174,8 +183,25 @@ int main(int argc, char *argv[])
     //    admm.energies.emplace_back(e);
     //}
 
+    if (!options.stitches.empty()) {
+        std::ifstream in(options.stitches);
+        if (in) {
+            std::string line;
+            while (std::getline(in, line)) {
+                std::stringstream str(line);
+
+                int idx1, idx2;
+                str >> idx1 >> idx2;
+                if (idx1 < sim_mesh.x.size() / 3 &&
+                    idx2 < sim_mesh.x.size() / 3) {
+                    admm.energies.push_back(std::make_shared<StitchEnergy>(idx1, idx2));
+                }
+            }
+        }
+    }
+
     viewer.callback_key_down = &key_down;
-    viewer.callback_pre_draw = std::bind(&step, std::placeholders::_1, std::ref(admm), std::ref(sim_mesh), options.dt, options.iterations, options.damping, options.friction);
+    viewer.callback_pre_draw = std::bind(&step, std::placeholders::_1, std::ref(admm), std::ref(sim_mesh), std::ref(avatar), options.dt, options.iterations, options.damping, options.friction);
 
     viewer.launch();
 }
