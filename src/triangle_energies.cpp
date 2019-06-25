@@ -9,8 +9,9 @@
 
 TriangleOrthoStrain::TriangleOrthoStrain(const Eigen::Vector3i& idxs,
                                          const std::vector<Eigen::Vector3d>& x,
-                                         double ks)
-    : idxs_(idxs)  {
+                                         double ksx, double ksy,
+                                         bool ignore_compression)
+    : idxs_(idxs), ignore_compression_(ignore_compression)  {
 
     Matrix3x2 Ds;
     Ds.col(0) = x[1] - x[0];
@@ -29,7 +30,11 @@ TriangleOrthoStrain::TriangleOrthoStrain(const Eigen::Vector3i& idxs,
 
     A_ = F.determinant() * 0.5;
 
-    weight_ = std::sqrt(ks * A_);
+    ksx = std::sqrt(ksx * A_);
+    ksy = std::sqrt(ksy * A_);
+
+    weights_ = Eigen::VectorXd(6);
+    weights_ << ksx, ksx, ksx, ksy, ksy, ksy;
 
     S_.setZero();
     S_(0,0) = -1; S_(0,1) = -1;
@@ -68,6 +73,15 @@ Eigen::VectorXd TriangleOrthoStrain::reduce(const Eigen::VectorXd& x) const {
 void TriangleOrthoStrain::project(Eigen::VectorXd& zi) const {
     Eigen::JacobiSVD<Matrix3x2>
         svd(Eigen::Map<Matrix3x2>(zi.data()), Eigen::ComputeThinU | Eigen::ComputeThinV);
+
+    //Eigen::Vector2d S = Eigen::Vector2d::Ones();
+    //if (ignore_compression_) {
+    //    for (int i=0; i<2; i++) {
+    //        S[i] = std::min(S[i], svd.singularValues()[i]);
+    //    }
+    //}
+
+    //Matrix3x2 P = svd.matrixU().leftCols(2) * S.asDiagonal() * svd.matrixV().transpose();
 
     Matrix3x2 P = svd.matrixU().leftCols(2) * svd.matrixV().transpose();
     zi = 0.5 * (Eigen::Map<Vector6d>(P.data()) + zi);

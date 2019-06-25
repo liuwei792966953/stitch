@@ -36,6 +36,7 @@ include_directories(src)
 
 set(SOURCES
     glad/src/glad.c
+    src/hinge_energy.cpp
     src/triangle_energies.cpp
     src/admm_integrator.cpp
     src/view.cpp)

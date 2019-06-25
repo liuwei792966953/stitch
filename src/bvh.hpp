@@ -6,6 +6,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <Eigen/StdVector>
+#include <iostream>
 #include <numeric>
 #include <stack>
 #include <vector>
@@ -101,7 +102,7 @@ public:
     }
 
     template <typename F>
-    void visit(const Eigen::Vector3d& pt, F func) {
+    void visit(const Eigen::Vector3d& pt, F func) const {
         std::stack<int> q;
         q.push(0); // Start with root node
 

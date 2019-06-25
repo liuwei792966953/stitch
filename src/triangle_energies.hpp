@@ -12,10 +12,11 @@ class TriangleOrthoStrain : public Energy {
 
     public:
     TriangleOrthoStrain(const Eigen::Vector3i& idxs,
-            const std::vector<Eigen::Vector3d> &x, double ks);
+            const std::vector<Eigen::Vector3d> &x,
+            double ksx, double ksy,
+            bool ignore_compression=false);
 
     int dim() const { return 6; }
-    double weight() const { return weight_; }
 
     void get_reduction(std::vector<Eigen::Triplet<double>> &triplets) const;
 
@@ -26,8 +27,9 @@ class TriangleOrthoStrain : public Energy {
     protected:
     Eigen::Vector3i idxs_;
 
+    bool ignore_compression_;
+
     double A_;
-    double weight_;
     Eigen::Matrix2d rest_;
 
     Eigen::Matrix<double,3,2> S_;

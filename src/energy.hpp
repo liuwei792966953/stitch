@@ -18,14 +18,19 @@ public:
     void set_index(int i) { index_ = i; }
     int index() const { return index_; }
 
+    const Eigen::VectorXd& weights() const { return weights_; };
+    
     virtual int dim() const = 0;
-
-    virtual double weight() const = 0;
 
     virtual Eigen::VectorXd reduce(const Eigen::VectorXd& x) const = 0;
 
     virtual void get_reduction(std::vector<Eigen::Triplet<double>> &triplets) const = 0;
     virtual void project(Eigen::VectorXd &zi) const = 0;
+
+    virtual void update(int iter) { }
+
+protected:
+    Eigen::VectorXd weights_;
 
 private:
     int index_;

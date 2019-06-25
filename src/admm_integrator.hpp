@@ -6,6 +6,7 @@
 #include <igl/barycentric_coordinates.h>
 #include <unordered_set>
 
+#include "collisions.hpp"
 #include "conjugate_gradient.hpp"
 #include "energy.hpp"
 #include "mesh.hpp"
@@ -17,13 +18,6 @@ public:
     std::vector<std::shared_ptr<Energy>> energies;
 
     void initialize(const TriMesh& mesh, double dt);
-
-    struct Collision {
-        int tri_idx = -1;
-        double dx = 0.0;
-        Eigen::Vector3d n;
-        Eigen::Vector3d w;
-    };
 
     void step(TriMesh& mesh, double dt, int internal_iters, double kd, double mu);
 
@@ -37,7 +31,6 @@ protected:
     Eigen::VectorXd dx_;
 
     SparseMatrixd A_;
-    SparseMatrixd D_;
     SparseMatrixd DtWtW_;
 
     std::unordered_set<int> pins_;

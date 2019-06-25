@@ -2,7 +2,7 @@
 
 #include <unordered_map>
 
-#include "BVH.hpp"
+#include "bvh.hpp"
 #include "mesh.hpp"
 
 

@@ -17,8 +17,11 @@ struct CLOptions {
     std::string avatar;
     std::string stitches;
 
-    double density = 0.01;
+    double density = 0.02;
     double friction = 0.0;
+    double ks_x = 1.0e7;
+    double ks_y = 1.0e6;
+    double kb = 100.0;
     double damping = 0.0;
     double dt = 1.0 / 30.0;
 
@@ -87,6 +90,15 @@ int main(int argc, char *argv[])
     | clara::Opt(options.density, "density")
         ["--density"]
         ("The density of the material in g / cm^2. Defaults to 0.01")
+    | clara::Opt(options.ks_x, "ks_x")
+        ["--ksx"]
+        ("The stretching resistance in the x-direction. Defaults to 1.0e7.")
+    | clara::Opt(options.ks_y, "ks_y")
+        ["--ksy"]
+        ("The stretching resistance in the y-direction. Defaults to 1.0e6.")
+    | clara::Opt(options.kb, "kb")
+        ["--kb"]
+        ("The bending resistance. Defaults to 100.0.")
     | clara::Opt(options.friction, "friction")
         ["-f"]["--friction"]
         ("The friction parameter. Value between (0.0, inf). Defaults to 0.0.")
@@ -125,7 +137,7 @@ int main(int argc, char *argv[])
 
 
     TriMesh sim_mesh;
-    load_tri_mesh(options.mesh, sim_mesh);
+    load_tri_mesh(options.mesh, sim_mesh, true);
 
     Eigen::MatrixXd V(sim_mesh.x.size() / 3, 3);
     for (int i=0; i<V.rows(); i++) {
@@ -136,16 +148,28 @@ int main(int argc, char *argv[])
     sim_mesh.idx = viewer.data_list.size() - 1;
 
     sim_mesh.v = Eigen::VectorXd::Zero(sim_mesh.x.rows());
-    sim_mesh.m = Eigen::VectorXd::Ones(sim_mesh.x.rows()) * 0.01;
+    sim_mesh.m = Eigen::VectorXd::Zero(sim_mesh.x.rows());
+
+    for (int i=0; i<sim_mesh.f.rows(); i++) {
+        double a = (sim_mesh.x.segment<3>(3*sim_mesh.f(i,1)) - sim_mesh.x.segment<3>(3*sim_mesh.f(i,0))).cross(
+                    sim_mesh.x.segment<3>(3*sim_mesh.f(i,2)) - sim_mesh.x.segment<3>(3*sim_mesh.f(i,0))).norm() * 0.5;
+
+        for (int j=0; j<3; j++) {
+            sim_mesh.x.segment<3>(3*sim_mesh.f(i,j)) += Eigen::Vector3d::Ones() * a * options.density;
+        }
+    }
 
 
     AnimatedMesh avatar;
     if (!options.avatar.empty()) {
-        for (int i=1; i<122; i++) {
-            std::string nbr = std::to_string(i);
-            nbr.insert(nbr.begin(), 3 - nbr.size(), '0');
-            avatar.obj_files.push_back("/Users/dharmon/Desktop/avatar/avatar_" + nbr + ".obj");
+        if (options.avatar.find("avatar") != std::string::npos) {
+            for (int i=1; i<122; i++) {
+                std::string nbr = std::to_string(i);
+                nbr.insert(nbr.begin(), 3 - nbr.size(), '0');
+                avatar.obj_files.push_back("/Users/dharmon/Desktop/avatar/avatar_" + nbr + ".obj");
+            }
         }
+
         load_tri_mesh(options.avatar, avatar);
         avatar.v = Eigen::VectorXd::Zero(avatar.x.size());
 
@@ -168,24 +192,22 @@ int main(int argc, char *argv[])
     for (int i=0; i<sim_mesh.f.rows(); i++) {
         std::vector<Eigen::Vector3d> xs;
         for (int j=0; j<3; j++) {
-            if (sim_mesh.ft.rows() > 0) {
-                Eigen::Vector2d x = sim_mesh.vt.segment<2>(2*sim_mesh.ft(i,j)) * 10.0;
+            if (sim_mesh.has_uvs()) {
+                Eigen::Vector2d x = sim_mesh.vt.segment<2>(2*sim_mesh.uv_index(sim_mesh.f(i,j)));
                 xs.push_back(Eigen::Vector3d(x[0], x[1], 0.0));
             } else {
                 xs.push_back(sim_mesh.x.segment<3>(3*sim_mesh.f(i,j)));
             }
         }
-        admm.energies.push_back(std::make_shared<TriangleOrthoStrain>(sim_mesh.f.row(i), xs, 1000000));
+        admm.energies.push_back(std::make_shared<TriangleOrthoStrain>(sim_mesh.f.row(i), xs,
+                    options.ks_x, options.ks_y));
     }
-
-    //auto bend_energies = get_edge_energies(sim_mesh);
-    //for (auto& e : bend_energies) {
-    //    admm.energies.emplace_back(e);
-    //}
 
     if (!options.stitches.empty()) {
         std::ifstream in(options.stitches);
         if (in) {
+            std::vector<int> s;
+
             std::string line;
             while (std::getline(in, line)) {
                 std::stringstream str(line);
@@ -194,10 +216,24 @@ int main(int argc, char *argv[])
                 str >> idx1 >> idx2;
                 if (idx1 < sim_mesh.x.size() / 3 &&
                     idx2 < sim_mesh.x.size() / 3) {
+                    s.push_back(idx1);
+                    s.push_back(idx2);
                     admm.energies.push_back(std::make_shared<StitchEnergy>(idx1, idx2));
                 }
             }
+
+            sim_mesh.s = Eigen::MatrixXi(s.size() / 2, 2);
+            for (int i=0; i<sim_mesh.s.rows(); i++) {
+                for (int j=0; j<2; j++) {
+                    sim_mesh.s(i,j) = s[2*i+j];
+                }
+            }
         }
+    }
+
+    auto bend_energies = get_edge_energies(sim_mesh, options.kb, false);
+    for (auto& e : bend_energies) {
+        admm.energies.emplace_back(e);
     }
 
     viewer.callback_key_down = &key_down;

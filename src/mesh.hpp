@@ -3,8 +3,9 @@
 
 #pragma once
 
-#include "BVH.hpp"
+#include "bvh.hpp"
 #include <Eigen/Core>
+#include <igl/edge_flaps.h>
 #include <igl/readOBJ.h>
 
 #include "timer.hpp"
@@ -15,16 +16,48 @@ struct TriMesh {
     Eigen::VectorXd x;
     Eigen::VectorXd vt;
 
+    Eigen::MatrixXi e;  // edges (#E x 2)
+    Eigen::MatrixXi ef; // edge-face (#E x 2)
+    Eigen::MatrixXi ei; // Edge opp vertices (#e x 2)
+
+    Eigen::MatrixXi s; // stitches (#S x 2)
+
     Eigen::VectorXd v;
     Eigen::VectorXd m;
 
     BVH bvh;
 
     int idx;
+
+    bool has_uvs() const {
+        return f.rows() == ft.rows() && (x.size() / 3) == (vt.size() / 2);
+    }
+
+    // Takes a vertex index and returns an index into vt for that vertex
+    int uv_index(int idx) const {
+        for (int i=0; i<f.rows(); i++) {
+            for (int j=0; j<3; j++) {
+                if (f(i,j) == idx) {
+                    return ft(i,j);
+                }
+            }
+        }
+        return -1;
+    }
+
+    int edge_index(int v0, int v1) {
+        for (int i=0; i<e.rows(); i++) {
+            if ((e(i,0) == v0 && e(i,1) == v1) ||
+                (e(i,0) == v1 && e(i,1) == v0)) {
+                return i;
+            }
+        }
+        return -1;
+    }
 };
 
 inline
-void load_tri_mesh(const std::string& fn, TriMesh& mesh) {
+void load_tri_mesh(const std::string& fn, TriMesh& mesh, bool get_edges=false) {
     Eigen::MatrixXd V;
     Eigen::MatrixXd VT;
     Eigen::MatrixXd VN;
@@ -42,6 +75,11 @@ void load_tri_mesh(const std::string& fn, TriMesh& mesh) {
     for (int i=0; i<VT.rows(); i++) {
         mesh.vt.segment<2>(2*i) = VT.row(i);
     }
+
+    if (get_edges) {
+        Eigen::VectorXi emap;
+        igl::edge_flaps(mesh.f, mesh.e, emap, mesh.ef, mesh.ei);
+    }
 }
 
 struct AnimatedMesh : TriMesh {
@@ -58,6 +96,8 @@ struct AnimatedMesh : TriMesh {
             }
 
             v = (x - old_x) / dt;
+        } else if (curr_frame + 1 == obj_files.size()) {
+            v = Eigen::VectorXd::Zero(x.size());
         }
     }
     

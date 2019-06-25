@@ -134,6 +134,10 @@ public:
         }
     }
 
+    const Eigen::Matrix3d& S(int idx) {
+        return S_[idx];
+    }
+
 protected:
     //Eigen::VectorXd P_;
     //SparseMatrixd P_;

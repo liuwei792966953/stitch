@@ -9,11 +9,12 @@
 
 class StitchEnergy : public Energy {
 public:
-    StitchEnergy(int idx1, int idx2) : idx1_(idx1), idx2_(idx2), ks_(10000.0) { }
+    StitchEnergy(int idx1, int idx2)
+        : idx1_(idx1), idx2_(idx2) {
+        weights_ = Eigen::VectorXd::Constant(3, 10000.0);
+    }
 
     int dim() const { return 3; }
-
-    double weight() const { return ks_; }
 
     Eigen::VectorXd reduce(const Eigen::VectorXd& x) const {
         return x.segment<3>(3*idx2_) - x.segment<3>(3*idx1_);
@@ -28,13 +29,18 @@ public:
 
     void project(Eigen::VectorXd &zi) const {
         //zi = Eigen::Vector3d::Zero();
-        zi *= 0.9;
+        zi *= kd_;
+    }
+    
+    virtual void update(int iter) {
+        if (iter > 25) { kd_ = 0.5; }
+        else if (iter > 15) { kd_ = 0.75; }
     }
 
 protected:
     int idx1_;
     int idx2_;
 
-    double ks_;
+    double kd_ = 0.95;
 
 };
