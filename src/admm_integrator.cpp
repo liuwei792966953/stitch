@@ -56,6 +56,7 @@ void ADMM_Integrator::initialize(const TriMesh& mesh, double dt) {
 
 void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double kd, double mu) {
         const Eigen::Vector3d gravity(0.0, -980.0, 0.0);
+        const double offset = 0.2;
 
         Timer timer;
         timer.start("Total");
@@ -82,6 +83,8 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
             energies[i]->update(iteration);
         }
 
+        dx_.setZero();
+
         // TODO: Have a "stitching" phase defined if they are mostly closed or not
         // TODO: Other external forces
         if (iteration > 10) {
@@ -91,6 +94,7 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
         } else {
             mesh.v.setZero();
         }
+
         iteration++;
 
         timer.start("Explicit step");
@@ -111,8 +115,6 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
 
         // Element-wise multiplication (m.asDiagonal() * x_curr would also work)
         const Eigen::VectorXd Mx = mesh.m.array() * x_curr.array();
-
-        dx_ = Eigen::VectorXd::Zero(mesh.x.rows());
 
         timer.start("Internal iterations");
 
@@ -143,18 +145,14 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
 
         timer.stop("Internal iterations");
 
-        mesh.v = (x_curr - mesh.x) * (1.0 - kd) / dt;
-        mesh.x = x_curr;
-
         timer.start("Avatar collisions");
- 
+
         if (avatar) {
             cg_.reset();
 
             timer.start("Detection");
 
-            const double offset = 0.2;
-            auto cs = Collisions::get_avatar_collisions(*avatar, mesh.x, offset);
+            auto cs = Collisions::get_avatar_collisions(*avatar, x_curr, offset);
 
             timer.stop("Detection");
 
@@ -168,7 +166,7 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
                         avatar_vel.noalias() += avatar->v.segment<3>(3*avatar->f(cs[i].tri_idx,j)) * cs[i].w[j];
                     }
 
-                    cs[i].rel_vel = mesh.v.segment<3>(3*i) - avatar_vel;
+                    cs[i].av_dx = avatar_vel * dt;
 
                     bool colliding = true;
                     if (collisions_[i].tri_idx != -1) {
@@ -176,8 +174,12 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
                                 dx_.segment<3>(3*i).dot(collisions_[i].n) < 0.0) {
                             colliding = false;
                         }
-                    } else if (cs[i].dx > 0.0 &&
-                            (offset - cs[i].dx) < cs[i].rel_vel.dot(collisions_[i].n) * dt) {
+                    }
+                    else if (cs[i].dx > 0.0 &&
+                            (offset - cs[i].dx) <
+                                //(mesh.v.segment<3>(3*i) * dt -
+                                 ((x_curr.segment<3>(3*i) - mesh.x.segment<3>(3*i)) -
+                                    cs[i].av_dx).dot(cs[i].n)) {
                         colliding = false;
                     }
 
@@ -197,39 +199,14 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
                     const Eigen::Vector3d& n = collisions_[i].n;
 
                     if (collisions_[i].dx < 0.8 * offset) {
-                        mesh.x.segment<3>(3*i) += n * dx;
+                        x_curr.segment<3>(3*i) += n * dx;
                     }
-
+                
                     cg_.setFilter(i, Eigen::Matrix3d::Identity() - n * n.transpose());
 
-                    const double vn = collisions_[i].rel_vel.dot(n);
-                    if (vn < 0.0) {
-                        mesh.v.segment<3>(3*i) -= n * vn;
-                    }
-
-                    const double mag = dx_.segment<3>(3*i).dot(n);
-                    //const double mag = dx + dx_.segment<3>(3*i).dot(n);
-                    //const double mag = -vn;
-                    if (mag > 0.0) {
-                        Eigen::Vector3d vt = collisions_[i].rel_vel - n * vn;
-                        const double vt_mag = vt.norm();
-
-                        const double dv_max = mu * mag;// / dt;
-                        
-                        const Eigen::Vector3d t = vt / vt_mag;
-
-                        if (vt_mag < dv_max) {
-                            // Static friction
-                            mesh.v.segment<3>(3*i) -= vt;
-                            //cg_.setFilter(i, Eigen::Matrix3d::Zero());
-                    cg_.setFilter(i, Eigen::Matrix3d::Identity() - n * n.transpose() - t * t.transpose());
-                        } else {
-                            // Dynamic friction
-                            // Subtract out as much velocity as allowed by
-                            // Coulomb's law
-                            mesh.v.segment<3>(3*i) -= t * dv_max;
-                        }
-                    }
+                    dx_.segment<3>(3*i) = n * dx;
+                } else {
+                    dx_.segment<3>(3*i).setZero();
                 }
             }
 
@@ -238,8 +215,46 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
 
         timer.stop("Avatar collisions");
 
+        timer.start("Avatar friction");
+ 
+        if (avatar) {
+            #pragma omp parallel for
+            for (int i=0; i<mesh.x.size() / 3; i++) {
+                const Eigen::Vector3d dx_i = x_curr.segment<3>(3*i) - mesh.x.segment<3>(3*i);
+
+                if (collisions_[i].tri_idx != -1) {
+                    const Eigen::Vector3d& n = collisions_[i].n;
+
+                    const double mag = dx_.segment<3>(3*i).dot(n);
+                    if (mag > 0.0) {
+                        Eigen::Vector3d rel_dx = dx_i - collisions_[i].av_dx;
+
+                        Eigen::Vector3d dx_t = rel_dx - n * n.dot(rel_dx);
+                        const double dx_mag = dx_t.norm();
+
+                        const double dx_max = mu * mag;
+
+                        if (dx_mag < dx_max) {
+                            // Static friction
+                            //x_curr.segment<3>(3*i) = mesh.x.segment<3>(3*i);
+                            x_curr.segment<3>(3*i) -= dx_t;
+                            cg_.setFilter(i, Eigen::Matrix3d::Zero());
+                        } else {
+                            // Dynamic friction
+                            // Subtract out as much velocity as allowed by
+                            // Coulomb's law
+                            x_curr.segment<3>(3*i) -= dx_t * dx_max / dx_mag;
+                        }
+                    }
+                }
+            }
+        }
+
+        timer.stop("Avatar friction");
+
+        mesh.v = cg_.filter(x_curr - mesh.x) * (1.0 - kd) / dt;
+        mesh.x = x_curr;
+
         timer.summary();
-        //const double ms = timer.elapsed();
-        //std::cout << (1000.0 / ms) << " fps (" << ms << " ms)" << std::endl;
     }
 

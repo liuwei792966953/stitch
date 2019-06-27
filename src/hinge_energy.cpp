@@ -10,17 +10,22 @@ std::vector<Eigen::Vector3d> get_aligned(const std::vector<Eigen::Vector3d>& xs)
     Eigen::Vector3d e1 = xs[1] - xs[0];
     Eigen::Vector3d e2 = xs[4] - xs[3];
 
-    Eigen::Quaterniond q;
-    q.FromTwoVectors(e2, e1);
+    Eigen::Vector3d e3 = xs[5] - xs[3];
 
-    // Now rotate other vector by the same amount
-    Eigen::Vector3d e3_new = q * (xs[5] - xs[3]);
+    if ((e1 - e2).squaredNorm() > 1.0e-8) {
+        Eigen::Quaterniond q;
+        q.FromTwoVectors(e2, e1);
+
+        // Now rotate other vector by the same amount
+        e3 = q * e3;
+    }
 
     std::vector<Eigen::Vector3d> xs_new;
     xs_new.push_back(xs[0]);
     xs_new.push_back(xs[1]);
     xs_new.push_back(xs[2]);
-    xs_new.push_back(xs[0] + e3_new);
+    xs_new.push_back(xs[0] + e3);
+
     return xs_new;
 }
 
@@ -68,8 +73,8 @@ std::vector<std::shared_ptr<Energy>> get_edge_energies(TriMesh& mesh, double kb,
                 continue;
             }
 
-            const int o0 = mesh.ei(e0, 0);
-            const int o1 = mesh.ei(e1, 0);
+            const int o0 = mesh.f(mesh.ef(e0, 0), mesh.ei(e0, 0));
+            const int o1 = mesh.f(mesh.ef(e1, 0), mesh.ei(e1, 0));
 
             if (o0 == -1 || o1 == -1) {
                 std::cout << "Opps: " << mesh.ei(e0,1) << "; " << mesh.ei(e1,1) << std::endl;

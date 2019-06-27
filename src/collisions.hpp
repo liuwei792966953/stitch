@@ -12,7 +12,7 @@ struct Collision {
     double dx = 0.0;
     Eigen::Vector3d n;
     Eigen::Vector3d w;
-    Eigen::Vector3d rel_vel = Eigen::Vector3d::Zero();
+    Eigen::Vector3d av_dx = Eigen::Vector3d::Zero();
 };
 
 namespace Collisions {

@@ -19,9 +19,9 @@ struct CLOptions {
 
     double density = 0.02;
     double friction = 0.0;
-    double ks_x = 1.0e7;
-    double ks_y = 1.0e6;
-    double kb = 100.0;
+    double ks_x = 1.0e4;
+    double ks_y = 1.0e4;
+    double kb = 1.0;
     double damping = 0.0;
     double dt = 1.0 / 30.0;
 
@@ -92,13 +92,13 @@ int main(int argc, char *argv[])
         ("The density of the material in g / cm^2. Defaults to 0.01")
     | clara::Opt(options.ks_x, "ks_x")
         ["--ksx"]
-        ("The stretching resistance in the x-direction. Defaults to 1.0e7.")
+        ("The stretching resistance in the x-direction. Defaults to 1.0e4.")
     | clara::Opt(options.ks_y, "ks_y")
         ["--ksy"]
-        ("The stretching resistance in the y-direction. Defaults to 1.0e6.")
+        ("The stretching resistance in the y-direction. Defaults to 1.0e4.")
     | clara::Opt(options.kb, "kb")
         ["--kb"]
-        ("The bending resistance. Defaults to 100.0.")
+        ("The bending resistance. Defaults to 1.0.")
     | clara::Opt(options.friction, "friction")
         ["-f"]["--friction"]
         ("The friction parameter. Value between (0.0, inf). Defaults to 0.0.")
@@ -151,11 +151,13 @@ int main(int argc, char *argv[])
     sim_mesh.m = Eigen::VectorXd::Zero(sim_mesh.x.rows());
 
     for (int i=0; i<sim_mesh.f.rows(); i++) {
-        double a = (sim_mesh.x.segment<3>(3*sim_mesh.f(i,1)) - sim_mesh.x.segment<3>(3*sim_mesh.f(i,0))).cross(
-                    sim_mesh.x.segment<3>(3*sim_mesh.f(i,2)) - sim_mesh.x.segment<3>(3*sim_mesh.f(i,0))).norm() * 0.5;
+        double A = (sim_mesh.x.segment<3>(3*sim_mesh.f(i,1)) -
+                    sim_mesh.x.segment<3>(3*sim_mesh.f(i,0))).cross(
+                    sim_mesh.x.segment<3>(3*sim_mesh.f(i,2)) -
+                    sim_mesh.x.segment<3>(3*sim_mesh.f(i,0))).norm() * 0.5;
 
         for (int j=0; j<3; j++) {
-            sim_mesh.x.segment<3>(3*sim_mesh.f(i,j)) += Eigen::Vector3d::Ones() * a * options.density;
+            sim_mesh.m.segment<3>(3*sim_mesh.f(i,j)) += Eigen::Vector3d::Ones() * A * options.density;
         }
     }
 
@@ -231,7 +233,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    auto bend_energies = get_edge_energies(sim_mesh, options.kb, false);
+    auto bend_energies = get_edge_energies(sim_mesh, options.kb, true);
     for (auto& e : bend_energies) {
         admm.energies.emplace_back(e);
     }
