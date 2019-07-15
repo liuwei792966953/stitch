@@ -41,7 +41,7 @@ void ADMM_Integrator::initialize(const TriMesh& mesh, double dt) {
         A_.coeffRef(i,i) += mesh.m[i];
     }
 
-    ldlt_.compute(A_);
+    //ldlt_.compute(A_);
     cg_.compute(A_);
 
     collisions_.resize(mesh.x.rows() / 3);
@@ -55,7 +55,8 @@ void ADMM_Integrator::initialize(const TriMesh& mesh, double dt) {
 
 
 void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double kd, double mu) {
-        const Eigen::Vector3d gravity(0.0, -980.0, 0.0);
+        const Eigen::Vector3d gravity(0.0, 0.0, 0.0);
+        //const Eigen::Vector3d gravity(0.0, -980.0, 0.0);
         const double offset = 0.2;
 
         Timer timer;
@@ -120,7 +121,7 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
 
         for (int iter=0; iter<internal_iters; iter++) {
             timer.start("Local energy update");
-            #pragma omp parallel for num_threads(4)
+            //#pragma omp parallel for num_threads(4)
             for (size_t i=0; i<energies.size(); i++) {
                 const auto& energy = energies[i];
 

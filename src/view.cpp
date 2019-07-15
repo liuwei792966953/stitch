@@ -15,7 +15,9 @@
 struct CLOptions {
     std::string mesh;
     std::string avatar;
+    std::string avatar_animation;
     std::string stitches;
+    std::string bend_angles;
 
     double density = 0.02;
     double friction = 0.0;
@@ -87,6 +89,12 @@ int main(int argc, char *argv[])
     | clara::Opt(options.avatar, "avatar")
         ["-a"]["--avatar"]
         ("The avatar mesh in OBJ format.")
+    | clara::Opt(options.avatar_animation, "avatar-animation")
+        ["-aa"]["--avatar-animation"]
+        ("Binary file containing avatar animation data.")
+    | clara::Opt(options.bend_angles, "bend_angles")
+        ["-ba"]["--bend-angles"]
+        ("A file that specifies bend angles, where each line is v0 v1 angle.")
     | clara::Opt(options.density, "density")
         ["--density"]
         ("The density of the material in g / cm^2. Defaults to 0.01")
@@ -139,6 +147,12 @@ int main(int argc, char *argv[])
     TriMesh sim_mesh;
     load_tri_mesh(options.mesh, sim_mesh, true);
 
+    if (sim_mesh.has_uvs()) { sim_mesh.vt *= 10.0; }
+
+    for (int i=0; i<sim_mesh.x.size()/3; i++) {
+        sim_mesh.x[3*i+1] += 0.1 * double(rand() / double(RAND_MAX)) - 0.05;
+    }
+
     Eigen::MatrixXd V(sim_mesh.x.size() / 3, 3);
     for (int i=0; i<V.rows(); i++) {
         V.row(i) = sim_mesh.x.segment<3>(3*i);
@@ -164,14 +178,6 @@ int main(int argc, char *argv[])
 
     AnimatedMesh avatar;
     if (!options.avatar.empty()) {
-        if (options.avatar.find("avatar") != std::string::npos) {
-            for (int i=1; i<122; i++) {
-                std::string nbr = std::to_string(i);
-                nbr.insert(nbr.begin(), 3 - nbr.size(), '0');
-                avatar.obj_files.push_back("/Users/dharmon/Desktop/avatar/avatar_" + nbr + ".obj");
-            }
-        }
-
         load_tri_mesh(options.avatar, avatar);
         avatar.v = Eigen::VectorXd::Zero(avatar.x.size());
 
@@ -188,6 +194,26 @@ int main(int argc, char *argv[])
 
         avatar.bvh.init(avatar.f, avatar.x, 2.5);
         admm.addAvatar(avatar);
+
+        if (!options.avatar_animation.empty()) {
+            std::ifstream in(options.avatar_animation, std::ios::binary);
+            if (in) {
+                in.seekg(0, std::ios::end);
+                const size_t num_elements = in.tellg() / sizeof(float);
+                in.seekg(0, std::ios::beg);
+
+                std::vector<float> data(num_elements);
+                in.read(reinterpret_cast<char*>(&data[0]), num_elements*sizeof(float));
+
+                size_t curr_idx = 0;
+                while (curr_idx + avatar.v.size() <= num_elements) {
+                    avatar.vertex_data.emplace(data.data()+curr_idx,
+                                               data.data()+curr_idx+avatar.v.size());
+                    curr_idx += avatar.v.size();
+                }
+                std::cout << "Read " << avatar.vertex_data.size() << " frames." << std::endl;
+            }
+        }
     }
 
 
@@ -233,7 +259,23 @@ int main(int argc, char *argv[])
         }
     }
 
-    auto bend_energies = get_edge_energies(sim_mesh, options.kb, true);
+    std::vector<std::tuple<int, int, double>> angles;
+    if (!options.bend_angles.empty()) {
+        std::ifstream in(options.bend_angles);
+        if (in) {
+            std::string line;
+            while (std::getline(in, line)) {
+                std::stringstream str(line);
+
+                int idx1, idx2;
+                double angle;
+                str >> idx1 >> idx2 >> angle;
+                angles.push_back({ idx1, idx2, angle });
+            }
+        }
+    }
+
+    auto bend_energies = get_edge_energies(sim_mesh, options.kb, angles, true);
     for (auto& e : bend_energies) {
         admm.energies.emplace_back(e);
     }

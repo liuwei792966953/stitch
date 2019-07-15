@@ -9,7 +9,10 @@
 #include "collisions.hpp"
 #include "conjugate_gradient.hpp"
 #include "energy.hpp"
+#include "gauss_seidel.hpp"
+#include "jacobi.hpp"
 #include "mesh.hpp"
+#include "successive_over_relaxation.hpp"
 
 
 
@@ -39,7 +42,10 @@ protected:
 
     AnimatedMesh* avatar = nullptr;
 
-    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt_;
+    //Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt_;
+    //ConstrainedJacobi cg_;
+    //ConstrainedGaussSeidel cg_;
+    //ConstrainedSSOR cg_;
     ModifiedConjugateGradient cg_;
 };
 

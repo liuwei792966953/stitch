@@ -30,7 +30,7 @@ std::vector<Eigen::Vector3d> get_aligned(const std::vector<Eigen::Vector3d>& xs)
 }
 
 
-std::vector<std::shared_ptr<Energy>> get_edge_energies(TriMesh& mesh, double kb, bool across_stitches) {
+std::vector<std::shared_ptr<Energy>> get_edge_energies(TriMesh& mesh, double kb, const std::vector<std::tuple<int, int, double>>& angles, bool across_stitches) {
     std::vector<std::shared_ptr<Energy>> energies;
 
     std::array<int,4> idxs;
@@ -38,8 +38,8 @@ std::vector<std::shared_ptr<Energy>> get_edge_energies(TriMesh& mesh, double kb,
         if (mesh.ei(i,0) != -1 && mesh.ei(i,1) != -1) {
             idxs[0] = mesh.e(i,0);
             idxs[1] = mesh.e(i,1);
-            idxs[2] = mesh.ei(i,0);
-            idxs[3] = mesh.ei(i,1);
+            idxs[2] = mesh.f(mesh.ef(i, 0), mesh.ei(i, 0));
+            idxs[3] = mesh.f(mesh.ef(i, 1), mesh.ei(i, 1));
 
             std::vector<Eigen::Vector3d> xs;
             for (int i=0; i<4; i++) {
@@ -50,9 +50,24 @@ std::vector<std::shared_ptr<Energy>> get_edge_energies(TriMesh& mesh, double kb,
                     xs.push_back(mesh.x.segment<3>(3*idxs[i]));
                 }
             }
+
+            auto it = std::find_if(angles.begin(), angles.end(),
+                        [&idxs](const std::tuple<int, int, double>& t) {
+                            return ((idxs[0] == std::get<0>(t) &&
+                                     idxs[1] == std::get<1>(t)) ||
+                                    (idxs[1] == std::get<0>(t) &&
+                                     idxs[2] == std::get<1>(t)));
+                        });
+
+            if (it != angles.end()) {
+                energies.push_back(std::make_shared<QuadraticEnergy>(xs, idxs[0], idxs[1], idxs[2], idxs[3], kb, std::get<2>(*it)));
+            } else {
             
-            energies.push_back(std::make_shared<IBM_Energy>(xs, idxs[2], idxs[3], kb));
-            //energies.push_back(std::make_shared<HingeEnergy>(xs, idxs[0], idxs[1], idxs[2], idxs[3]));
+            //energies.push_back(std::make_shared<IBM_Energy>(xs, idxs[2], idxs[3], kb));
+            //energies.push_back(std::make_shared<HingeEnergy>(xs, idxs[0], idxs[1], idxs[2], idxs[3], kb));
+            energies.push_back(std::make_shared<QuadraticEnergy>(xs, idxs[0], idxs[1], idxs[2], idxs[3], kb));
+            }
+            //energies.push_back(std::make_shared<BendEnergy>(xs, idxs[0], idxs[1], idxs[2], idxs[3], kb));
         }
     }
 

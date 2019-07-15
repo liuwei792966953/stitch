@@ -7,6 +7,7 @@
 #include <Eigen/Core>
 #include <igl/edge_flaps.h>
 #include <igl/readOBJ.h>
+#include <queue>
 
 #include "timer.hpp"
 
@@ -85,23 +86,21 @@ void load_tri_mesh(const std::string& fn, TriMesh& mesh, bool get_edges=false) {
 struct AnimatedMesh : TriMesh {
 
     void next_frame(double dt) {
-        if (curr_frame + 1 < obj_files.size()) {
-            curr_frame++;
-            
+        if (vertex_data.size()) {
             Eigen::VectorXd old_x = x;
-            load_tri_mesh(obj_files[curr_frame], *this);
+
+            x = Eigen::Map<Eigen::VectorXd>(vertex_data.front().data(), x.size());
+            vertex_data.pop();
 
             if (!bvh.empty()) {
                 bvh.refit(f, x, 2.5, 0);
             }
 
             v = (x - old_x) / dt;
-        } else if (curr_frame + 1 == obj_files.size()) {
-            v = Eigen::VectorXd::Zero(x.size());
+        } else {
+            v.setZero();
         }
     }
     
-    std::vector<std::string> obj_files;
-
-    size_t curr_frame = 0;
+    std::queue<std::vector<double>> vertex_data;
 };
