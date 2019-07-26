@@ -3,12 +3,14 @@
 
 #pragma once
 
+#include <array>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <Eigen/StdVector>
 #include <iostream>
 #include <numeric>
 #include <stack>
+#include <unordered_set>
 #include <vector>
 
 
@@ -58,6 +60,25 @@ public:
         }
 
         build(0, aabbs, idxs);
+
+        // Assign each vertex to a "representative triangle". It can only belong
+        // to one
+        std::unordered_set<int> assigned;
+
+        rep_tri_vertices_.resize(F.rows(), { -1, -1, -1 }); 
+        for (int i=0; i<F.rows(); i++) {
+            for (int j=0; j<3; j++) {
+                if (!assigned.count(F(i,j))) {
+                    // Find first available slot
+                    size_t idx = std::distance(rep_tri_vertices_[i].begin(),
+                            std::find(rep_tri_vertices_[i].begin(),
+                                      rep_tri_vertices_[i].end(), -1));
+
+                    rep_tri_vertices_[i][idx] = F(i,j);
+                    assigned.insert(F(i,j));
+                }
+            }
+        }
     }
 
     void build(int idx, const AABB_Vector& aabbs, const std::vector<int>& idxs, int h=0) {
@@ -124,6 +145,53 @@ public:
             }
         }
     }
+
+    template <typename F>
+    void self_intersect(F f) const {
+        std::stack<std::pair<int, int>> s;
+        s.push({ 0, 0 });
+
+        while (!s.empty()) {
+            auto idxs = s.top();
+            s.pop();
+
+            if (bvs_[idxs.first].aabb.intersects(bvs_[idxs.second].aabb)) {
+                int d1 = bvs_[idxs.first].data_index;
+                int d2 = bvs_[idxs.second].data_index;
+
+                if (d1 > 0 && d2 > 0) {
+                    // Both leaf nodes
+                    for (int i=0; i<3; i++) {
+                        if (rep_tri_vertices_[d1-1][i] != -1) {
+                            f(rep_tri_vertices_[d1-1][i], d2);
+                        }
+                        if (rep_tri_vertices_[d2-1][i] != -1) {
+                            f(rep_tri_vertices_[d2-1][i], d1-1);
+                        }
+                    }
+                } else if (d1 > 0 && d2 != -1) {
+                    // First is leaf node, other is internal,
+                    // so just descend down the second
+                    for (int i=0; i<2; i++) {
+                        s.push({ idxs.first, 2 * idxs.second + 1 + i });
+                    }
+                } else if (d1 != -1 && d2 > 0) {
+                    // First is internal node, other is leaf,
+                    // so just descend down the first
+                    for (int i=0; i<2; i++) {
+                        s.push({ 2 * idxs.first + 1 + i, idxs.second });
+                    }
+                } else if (d1 != -1 && d2 != -1) {
+                    // Both internal nodes, intersect children pairs
+                    for (int i=0; i<2; i++) {
+                        for (int j=0; j<2; j++) {
+                            s.push({ 2 * idxs.first + 1 + i, 2 * idxs.second + 1 + j });
+                        }
+                    }
+                }
+            }
+        }
+    }
     
     void refit(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h) {
 
@@ -163,8 +231,8 @@ public:
                 bvs_[idx].aabb.extend(x.segment<3>(3*F(bvs_[idx].data_index-1,i)));
             }
 
-            bvs_[idx].aabb.extend(bvs_[idx].aabb.min() - Eigen::Vector3d::Ones() * h);
-            bvs_[idx].aabb.extend(bvs_[idx].aabb.max() + Eigen::Vector3d::Ones() * h);
+            bvs_[idx].aabb.extend(bvs_[idx].aabb.min() - Eigen::Vector3d::Constant(h));
+            bvs_[idx].aabb.extend(bvs_[idx].aabb.max() + Eigen::Vector3d::Constant(h));
         } else {
             for (int i=0; i<2; ++i) {
                 if (refit(F, x, h, 2 * idx + 1 + i)) {
@@ -220,4 +288,6 @@ protected:
 
 protected:
     std::vector<BV> bvs_;
+
+    std::vector<std::array<int, 3>> rep_tri_vertices_;
 };

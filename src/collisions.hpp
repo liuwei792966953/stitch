@@ -61,4 +61,41 @@ namespace Collisions {
         return cs;
     }
 
+    inline
+    bool get_barycentric_weights(const Eigen::Vector3d& p,
+                                 const Eigen::Vector3d& a,
+                                 const Eigen::Vector3d& b,
+                                 const Eigen::Vector3d& c,
+                                 Eigen::Vector3d& w) {
+        const Eigen::Vector3d v0 = b - a;
+        const Eigen::Vector3d v1 = c - a;
+        const Eigen::Vector3d v2 = p - a;
+
+        const double d00 = v0.dot(v0);
+        const double d01 = v0.dot(v1);
+        const double d11 = v1.dot(v1);
+        const double d20 = v2.dot(v0);
+        const double d21 = v2.dot(v1);
+        const double denom = d00 * d11 - d01 * d01;
+        if (std::fabs(denom) < 1.0e-8) {
+            w[0] = w[1] = w[2] = 1. / 3.;
+            return false;
+        }
+
+        w[1] = (d11 * d20 - d01 * d21) / denom;
+        w[2] = (d00 * d21 - d01 * d20) / denom;
+        w[0] = 1.0 - w[1] - w[2];
+
+        if (std::any_of(w.data(), w.data() + 3,
+                    [](const double v) { return v < -0.001 || v > 1.001; })) {
+            return false;
+        }
+
+        for (int i = 0; i < 3; i++) {
+            w[i] = std::max(std::min(w[i], 1.0), 0.0);
+        }
+
+        return true;
+    }
+
 }

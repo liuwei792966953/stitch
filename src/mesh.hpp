@@ -25,6 +25,8 @@ struct TriMesh {
 
     Eigen::VectorXd v;
     Eigen::VectorXd m;
+    Eigen::VectorXi vl;
+    Eigen::VectorXi fl;
 
     BVH bvh;
 

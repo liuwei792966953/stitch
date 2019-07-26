@@ -96,6 +96,51 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
             mesh.v.setZero();
         }
 
+        const bool do_layer_intersections = false;
+
+        if (do_layer_intersections) {
+        const double ks = 1.0;
+        const double h = 0.1;
+
+        timer.start("Mesh intersect");
+        mesh.bvh.refit(mesh.f, mesh.x, 2.0, 0);
+        mesh.bvh.self_intersect([&](int v, int f) {
+                if (mesh.f(f,0) == v ||
+                    mesh.f(f,1) == v ||
+                    mesh.f(f,2) == v) {
+                    return;
+                }
+
+                if (mesh.vl[v] == mesh.fl[f]) {
+                    return;
+                }
+
+                Eigen::Vector3d w;
+                if (Collisions::get_barycentric_weights(mesh.x.segment<3>(3*v),
+                            mesh.x.segment<3>(3*mesh.f(f,0)),
+                            mesh.x.segment<3>(3*mesh.f(f,1)),
+                            mesh.x.segment<3>(3*mesh.f(f,2)), w)) {
+                    Eigen::Vector3d n = 
+                            (mesh.x.segment<3>(3*mesh.f(f,1)) - mesh.x.segment<3>(3*mesh.f(f,0))).cross(mesh.x.segment<3>(3*mesh.f(f,2)) - mesh.x.segment<3>(3*mesh.f(f,0))).normalized();
+
+                    if (mesh.fl[f] > mesh.vl[v]) {
+                        n *= -1.0;
+                    }
+
+                    double d = (mesh.x.segment<3>(3*v) - mesh.x.segment<3>(3*mesh.f(f,0))).dot(n);
+                    if (d < h) {
+                        //std::cout << "\tCollision: " << v << " <-> " << f << "; " << d << "; " << mesh.fl[f] << "; " << mesh.vl[v] << std::endl;
+                        mesh.v.segment<3>(3*v) -= dt * ks * (h - d) * n / mesh.m[3*v];
+                        for (size_t i=0; i<3; i++) {
+                            mesh.v.segment<3>(3*mesh.f(f,i)) += dt * ks * w[i] * (h - d) * n / mesh.m[3*mesh.f(f,i)];
+                        }
+                    }
+                }
+        });
+        timer.stop("Mesh intersect");
+
+        }
+
         iteration++;
 
         timer.start("Explicit step");

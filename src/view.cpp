@@ -18,6 +18,7 @@ struct CLOptions {
     std::string avatar_animation;
     std::string stitches;
     std::string bend_angles;
+    std::string layers;
 
     double density = 0.02;
     double friction = 0.0;
@@ -95,6 +96,9 @@ int main(int argc, char *argv[])
     | clara::Opt(options.bend_angles, "bend_angles")
         ["-ba"]["--bend-angles"]
         ("A file that specifies bend angles, where each line is v0 v1 angle.")
+    | clara::Opt(options.layers, "layers")
+        ["-l"]["--layers"]
+        ("A file that specifies vertex layers, where each line is v_start v_end l.")
     | clara::Opt(options.density, "density")
         ["--density"]
         ("The density of the material in g / cm^2. Defaults to 0.01")
@@ -149,9 +153,9 @@ int main(int argc, char *argv[])
 
     if (sim_mesh.has_uvs()) { sim_mesh.vt *= 10.0; }
 
-    for (int i=0; i<sim_mesh.x.size()/3; i++) {
-        sim_mesh.x[3*i+1] += 0.1 * double(rand() / double(RAND_MAX)) - 0.05;
-    }
+    //for (int i=0; i<sim_mesh.x.size()/3; i++) {
+    //    sim_mesh.x[3*i+1] += 0.1 * double(rand() / double(RAND_MAX)) - 0.05;
+    //}
 
     Eigen::MatrixXd V(sim_mesh.x.size() / 3, 3);
     for (int i=0; i<V.rows(); i++) {
@@ -160,9 +164,14 @@ int main(int argc, char *argv[])
 
     viewer.data().set_mesh(V, sim_mesh.f);
     sim_mesh.idx = viewer.data_list.size() - 1;
+    
+    sim_mesh.bvh.init(sim_mesh.f, sim_mesh.x);
 
     sim_mesh.v = Eigen::VectorXd::Zero(sim_mesh.x.rows());
     sim_mesh.m = Eigen::VectorXd::Zero(sim_mesh.x.rows());
+
+    sim_mesh.vl = Eigen::VectorXi::Ones(sim_mesh.x.rows() / 3);
+    sim_mesh.fl = Eigen::VectorXi::Ones(sim_mesh.f.rows());
 
     for (int i=0; i<sim_mesh.f.rows(); i++) {
         double A = (sim_mesh.x.segment<3>(3*sim_mesh.f(i,1)) -
@@ -256,6 +265,29 @@ int main(int argc, char *argv[])
                     sim_mesh.s(i,j) = s[2*i+j];
                 }
             }
+        }
+    }
+
+    if (!options.layers.empty()) {
+        std::ifstream in(options.layers);
+        if (in) {
+            std::string line;
+            while (std::getline(in, line)) {
+                std::stringstream str(line);
+
+                int v0, v1, l;
+                str >> v0 >> v1 >> l;
+                for (int i=v0; i<=v1; i++) {
+                    sim_mesh.vl[i] = l;
+                }
+            }
+        }
+
+        // For now, just assign the face layer as the highest layer of its vertices
+        for (int i=0; i<sim_mesh.f.rows(); i++) {
+            sim_mesh.fl[i] = std::max(std::max(sim_mesh.vl[sim_mesh.f(i,0)],
+                                               sim_mesh.vl[sim_mesh.f(i,1)]),
+                                               sim_mesh.vl[sim_mesh.f(i,2)]);
         }
     }
 
