@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <igl/barycentric_coordinates.h>
 #include <unordered_set>
 
 #include "collisions.hpp"
@@ -12,6 +11,7 @@
 #include "gauss_seidel.hpp"
 #include "jacobi.hpp"
 #include "mesh.hpp"
+#include "self_collision_energy.hpp"
 #include "successive_over_relaxation.hpp"
 
 
@@ -19,6 +19,7 @@
 class ADMM_Integrator {
 public:
     std::vector<std::shared_ptr<Energy>> energies;
+    std::vector<SelfCollisionEnergy> collision_energies;
 
     void initialize(const TriMesh& mesh, double dt);
 
@@ -42,7 +43,7 @@ protected:
 
     AnimatedMesh* avatar = nullptr;
 
-    //Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt_;
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt_;
     //ConstrainedJacobi cg_;
     //ConstrainedGaussSeidel cg_;
     //ConstrainedSSOR cg_;

@@ -44,3 +44,71 @@ protected:
     double kd_ = 0.95;
 
 };
+
+
+class StitchSpringEnergy : public BaseEnergy
+{
+public:
+    StitchSpringEnergy(double ks, double kd) : ks_(ks), kd_(kd) {}
+
+    void precompute(const TriMesh& mesh) { }
+
+    void getForceAndHessian(const TriMesh& mesh, const VecXd& x,
+				VecXd& F,
+				SparseMatrixd& dFdx,
+				SparseMatrixd& dFdv) const {
+
+	const double ks = ks_ * std::min(10.0, std::pow(1.1, iteration++));
+
+        for (int i=0; i<mesh.s.rows(); i++) {
+            const int i0 = mesh.s(i,0);
+            const int i1 = mesh.s(i,1);
+
+            // Zero-length spring. Doesn't get any easier...
+            Vec3d n = x.segment<3>(3*i1) - x.segment<3>(3*i0);
+            const double l = n.norm();
+            if (l > 1.0e-8) {
+                n /= l;
+            }
+            Vec3d v = mesh.v.segment<3>(3*i1) - mesh.v.segment<3>(3*i0);
+
+            F.segment<3>(3*i0).noalias() += n * l * ks + v * kd_;
+            F.segment<3>(3*i1).noalias() -= n * l * ks + v * kd_;
+
+            for (size_t l=0; l<3; l++) {
+                dFdx.coeffRef(3*i0+l, 3*i0+l) -= ks;
+                dFdx.coeffRef(3*i1+l, 3*i1+l) -= ks;
+                dFdx.coeffRef(3*i0+l, 3*i1+l) += ks;
+                dFdx.coeffRef(3*i1+l, 3*i0+l) += ks;
+
+                dFdv.coeffRef(3*i0+l, 3*i0+l) -= kd_;
+                dFdv.coeffRef(3*i1+l, 3*i1+l) -= kd_;
+                dFdv.coeffRef(3*i0+l, 3*i1+l) += kd_;
+                dFdv.coeffRef(3*i1+l, 3*i0+l) += kd_;
+            }
+        }
+    }
+
+    void getHessianPattern(const TriMesh& mesh, std::vector<SparseTripletd>& triplets) const {
+        for (int i=0; i<mesh.s.rows(); i++) {
+            const int i0 = mesh.s(i,0);
+            const int i1 = mesh.s(i,1);
+
+            for (int j=0; j<3; j++) {
+                for (int k=0; k<3; k++) {
+		    triplets.push_back(SparseTripletd(3*i0+j,3*i0+k, 1.0));
+		    triplets.push_back(SparseTripletd(3*i1+j,3*i1+k, 1.0));
+		    triplets.push_back(SparseTripletd(3*i0+j,3*i1+k, 1.0));
+		    triplets.push_back(SparseTripletd(3*i1+j,3*i0+k, 1.0));
+                }
+            }
+        }
+    }
+   
+protected:
+    const Real ks_;
+    const Real kd_;
+
+    mutable int iteration = 0;
+};
+

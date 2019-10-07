@@ -7,9 +7,24 @@
 #include <Eigen/Core>
 #include <Eigen/Sparse>
 
+#include "mesh.hpp"
+
 // Use RowMajor so that matrix-vector products are multi-threaded by Eigen
 using SparseMatrixd = Eigen::SparseMatrix<double,Eigen::RowMajor>;
 //using SparseMatrixd = Eigen::SparseMatrix<double>;
+
+using SparseTripletd = Eigen::Triplet<double>;
+
+using VecXd = Eigen::VectorXd;
+using Vec2d = Eigen::Vector2d;
+using Vec3d = Eigen::Vector3d;
+using Mat2d = Eigen::Matrix2d;
+using Mat3d = Eigen::Matrix3d;
+using MatXd = Eigen::MatrixXd;
+using Mat2x3d = Eigen::Matrix<double, 2, 3>;
+using Mat3x2d = Eigen::Matrix<double, 3, 2>;
+
+using Real = double;
 
 
 // Abstract interface to define an energy term
@@ -36,3 +51,28 @@ private:
     int index_;
 };
 
+class DynamicEnergy : public Energy {
+public:
+    virtual void multiply(const Eigen::VectorXd& x,
+                          const Eigen::VectorXd& factor,
+                          const Eigen::VectorXd& shift,
+                          Eigen::VectorXd& out) const = 0;
+};
+
+
+class BaseEnergy
+{
+public:
+    virtual ~BaseEnergy() { }
+
+    virtual void precompute(const TriMesh& mesh) = 0;
+
+    virtual void getForceAndHessian(const TriMesh& mesh,
+                                    const Eigen::VectorXd& x,
+				    Eigen::VectorXd& F,
+				    SparseMatrixd& dFdx,
+				    SparseMatrixd& dFdv) const = 0;
+
+    virtual void getHessianPattern(const TriMesh& mesh,
+                                   std::vector<SparseTripletd> &triplets) const = 0;
+};

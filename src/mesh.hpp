@@ -14,8 +14,11 @@
 struct TriMesh {
     Eigen::MatrixXi f;
     Eigen::MatrixXi ft;
+    Eigen::VectorXd fn;
     Eigen::VectorXd x;
+    Eigen::VectorXd u;
     Eigen::VectorXd vt;
+    Eigen::VectorXd vn;
 
     Eigen::MatrixXi e;  // edges (#E x 2)
     Eigen::MatrixXi ef; // edge-face (#E x 2)
@@ -28,7 +31,7 @@ struct TriMesh {
     Eigen::VectorXi vl;
     Eigen::VectorXi fl;
 
-    BVH bvh;
+    BVH<2> bvh;
 
     int idx;
 
@@ -48,7 +51,7 @@ struct TriMesh {
         return -1;
     }
 
-    int edge_index(int v0, int v1) {
+    int edge_index(int v0, int v1) const {
         for (int i=0; i<e.rows(); i++) {
             if ((e(i,0) == v0 && e(i,1) == v1) ||
                 (e(i,0) == v1 && e(i,1) == v0)) {
@@ -56,6 +59,27 @@ struct TriMesh {
             }
         }
         return -1;
+    }
+
+    int n_vertices() const { return x.size() / 3; }
+
+    void update_normals() {
+        vn.setZero();
+
+        for (int i=0; i<f.rows(); i++) {
+            fn.segment<3>(3*i) = (x.segment<3>(3*f(i,1)) -
+                                  x.segment<3>(3*f(i,0))).cross(
+                                  x.segment<3>(3*f(i,2)) -
+                                  x.segment<3>(3*f(i,0))).normalized();
+
+            for (int j=0; j<3; j++) {
+                vn.segment<3>(3*f(i,j)) += fn.segment<3>(3*i);
+            }
+        }
+
+        for (int i=0; i<n_vertices(); i++) {
+            vn.segment<3>(3*i).normalize();
+        }
     }
 };
 
@@ -83,6 +107,11 @@ void load_tri_mesh(const std::string& fn, TriMesh& mesh, bool get_edges=false) {
         Eigen::VectorXi emap;
         igl::edge_flaps(mesh.f, mesh.e, emap, mesh.ef, mesh.ei);
     }
+
+    mesh.fn = Eigen::VectorXd(mesh.f.rows() * 3);
+    mesh.vn = Eigen::VectorXd(mesh.x.size());
+
+    mesh.update_normals();
 }
 
 struct AnimatedMesh : TriMesh {
@@ -94,9 +123,7 @@ struct AnimatedMesh : TriMesh {
             x = Eigen::Map<Eigen::VectorXd>(vertex_data.front().data(), x.size());
             vertex_data.pop();
 
-            if (!bvh.empty()) {
-                bvh.refit(f, x, 2.5, 0);
-            }
+            bvh.refit(f, x, 2.5);
 
             v = (x - old_x) / dt;
         } else {

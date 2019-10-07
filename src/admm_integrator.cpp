@@ -41,8 +41,9 @@ void ADMM_Integrator::initialize(const TriMesh& mesh, double dt) {
         A_.coeffRef(i,i) += mesh.m[i];
     }
 
-    //ldlt_.compute(A_);
+    ldlt_.compute(A_);
     cg_.compute(A_);
+    cg_.resize(mesh.x.size() / 3);
 
     collisions_.resize(mesh.x.rows() / 3);
 
@@ -55,9 +56,17 @@ void ADMM_Integrator::initialize(const TriMesh& mesh, double dt) {
 
 
 void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double kd, double mu) {
-        const Eigen::Vector3d gravity(0.0, 0.0, 0.0);
-        //const Eigen::Vector3d gravity(0.0, -980.0, 0.0);
+        //const Eigen::Vector3d gravity(0.0, 0.0, 0.0);
+        const Eigen::Vector3d gravity(0.0, -980.0, 0.0);
         const double offset = 0.2;
+
+        auto multiply = [&](const Eigen::VectorXd& x) -> Eigen::VectorXd {
+            Eigen::VectorXd vec = A_ * x;
+            //for (const auto& e : collision_energies) {
+            //    e.multiply(x, e.weights() * dt * dt, mesh.m, vec);
+            //}
+            return vec;
+        };
 
         Timer timer;
         timer.start("Total");
@@ -102,8 +111,10 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
         const double ks = 1.0;
         const double h = 0.1;
 
+        collision_energies.clear();
+
         timer.start("Mesh intersect");
-        mesh.bvh.refit(mesh.f, mesh.x, 2.0, 0);
+        mesh.bvh.refit(mesh.f, mesh.x, 2.0);
         mesh.bvh.self_intersect([&](int v, int f) {
                 if (mesh.f(f,0) == v ||
                     mesh.f(f,1) == v ||
@@ -123,17 +134,19 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
                     Eigen::Vector3d n = 
                             (mesh.x.segment<3>(3*mesh.f(f,1)) - mesh.x.segment<3>(3*mesh.f(f,0))).cross(mesh.x.segment<3>(3*mesh.f(f,2)) - mesh.x.segment<3>(3*mesh.f(f,0))).normalized();
 
+                    bool flipped = mesh.fl[f] > mesh.vl[v];
                     if (mesh.fl[f] > mesh.vl[v]) {
                         n *= -1.0;
                     }
 
                     double d = (mesh.x.segment<3>(3*v) - mesh.x.segment<3>(3*mesh.f(f,0))).dot(n);
                     if (d < h) {
+                        collision_energies.emplace_back(v, mesh.f(f,0), mesh.f(f,1), mesh.f(f,2), flipped);
                         //std::cout << "\tCollision: " << v << " <-> " << f << "; " << d << "; " << mesh.fl[f] << "; " << mesh.vl[v] << std::endl;
-                        mesh.v.segment<3>(3*v) -= dt * ks * (h - d) * n / mesh.m[3*v];
-                        for (size_t i=0; i<3; i++) {
-                            mesh.v.segment<3>(3*mesh.f(f,i)) += dt * ks * w[i] * (h - d) * n / mesh.m[3*mesh.f(f,i)];
-                        }
+                        //mesh.v.segment<3>(3*v) -= dt * ks * (h - d) * n / mesh.m[3*v];
+                        //for (size_t i=0; i<3; i++) {
+                        //    mesh.v.segment<3>(3*mesh.f(f,i)) += dt * ks * w[i] * (h - d) * n / mesh.m[3*mesh.f(f,i)];
+                        //}
                     }
                 }
         });
@@ -156,6 +169,14 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
         for (size_t i=0; i<energies.size(); i++) {
             z_.segment(energies[i]->index(), energies[i]->dim()) = energies[i]->reduce(mesh.x);
         }
+
+        Eigen::VectorXd u_collision = Eigen::VectorXd::Zero(9*collision_energies.size());
+
+        Eigen::VectorXd z_collision(9*collision_energies.size());
+        #pragma omp parallel for num_threads(4)
+        for (size_t i=0; i<collision_energies.size(); i++) {
+            z_collision.segment<9>(9*i) = collision_energies[i].reduce(mesh.x);
+        }
         
         timer.stop("Z-update");
 
@@ -166,7 +187,7 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
 
         for (int iter=0; iter<internal_iters; iter++) {
             timer.start("Local energy update");
-            //#pragma omp parallel for num_threads(4)
+            #pragma omp parallel for num_threads(4)
             for (size_t i=0; i<energies.size(); i++) {
                 const auto& energy = energies[i];
 
@@ -177,13 +198,33 @@ void ADMM_Integrator::step(TriMesh& mesh, double dt, int internal_iters, double 
                 u_.segment(energy->index(), energy->dim()).noalias() += Dix - zi;
                 z_.segment(energy->index(), energy->dim()).noalias() = zi;
 	    }
+	    
+	    Eigen::VectorXd b = Mx + DtWtW_ * (z_ - u_);
+
             timer.stop("Local energy update");
 
-            timer.start("Solve / global update");
-	    const Eigen::VectorXd b = Mx + DtWtW_ * (z_ - u_);
+            timer.start("Collision energy update");
+            #pragma omp parallel for num_threads(4)
+            for (size_t i=0; i<collision_energies.size(); i++) {
+                const auto& energy = collision_energies[i];
 
-	    cg_.solve(A_, b, x_curr);
-	    //x_curr = ldlt_.solve(Mx + DtWtW_ * (z_ - u_));
+                Eigen::VectorXd Dix = energy.reduce(x_curr);
+                Eigen::VectorXd zi = Dix + u_collision.segment<9>(9*i);
+                energy.project(zi);
+
+                u_collision.segment<9>(9*i).noalias() += Dix - zi;
+                z_collision.segment<9>(9*i).noalias() = zi;
+            }
+            for (size_t i=0; i<collision_energies.size(); i++) {
+                collision_energies[i].do_something(z_collision.segment<9>(9*i) -
+                                                 u_collision.segment<9>(9*i), dt, b);
+            }
+            timer.stop("Collision energy update");
+
+            timer.start("Solve / global update");
+
+	    //cg_.solve(multiply, b, x_curr);
+	    x_curr = ldlt_.solve(b);
 
             dx_.noalias() += A_ * x_curr - b;
             timer.stop("Solve / global update");

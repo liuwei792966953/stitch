@@ -4,62 +4,49 @@
 #pragma once
 
 #include <array>
-#include <Eigen/Core>
-#include <Eigen/Geometry>
-#include <Eigen/StdVector>
 #include <iostream>
+#include "kdop.hpp"
 #include <numeric>
 #include <stack>
 #include <unordered_set>
 #include <vector>
 
 
-class BV {
-public:
-    BV() : data_index(-1) { };
 
-    Eigen::AlignedBox3d aabb;
+template <typename Type>
+class BoundingVolume : public Type  {
+public:
+    BoundingVolume() : Type(), data_index(-1) { };
     
     // -1 = inactive node, 0 = internal, > 0 = leaf
     int data_index; 
 };
 
 
+// N = branching factor
+template<size_t N>
 class BVH {
-    using AABB_Vector = std::vector<Eigen::AlignedBox3d, Eigen::aligned_allocator<Eigen::AlignedBox3d>>;
-
 public:
-    bool empty() const { return bvs_.empty(); }
-
-    const BV& root() const { return bvs_.front(); }
+    using BV = BoundingVolume<kDOP26d>;
 
     void init(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h=0.0) {
         // Each triangle is a leaf node, so assuming a full well-balanced
         // tree, we need at most this many nodes to hold the tree
         // (some nodes will be inactive)
-        const int L = std::ceil(std::log(F.rows()) / std::log(2));
-        bvs_.resize(std::pow(2, L + 1) - 1);
-        //bvs_.resize(std::ceil((4 * F.rows() - 1) / 3));
-        std::cout << "Max levels: " << (L+1) << std::endl;
-        std::cout << "Nbr BVs: " << bvs_.size() << std::endl;
-        std::cout << "Nbr elements: " << F.rows() << std::endl;
+        height_ = std::ceil(std::log(F.rows()) / std::log(N)) + 1;
+        bvs_.resize(std::pow(N, height_) - 1);
+        std::cout << F.rows() << "; " << bvs_.size() << std::endl;
 
         // To begin, construct a BV around all faces, then recurse down
-        std::vector<int> idxs(F.rows());
-        std::iota(idxs.begin(), idxs.end(), 0);
-
-        AABB_Vector aabbs;
+        std::vector<BV> leaves(F.rows());
         for (int i=0; i<F.rows(); i++) {
-            aabbs.push_back(Eigen::AlignedBox3d());
-            for (int j=0; j<3; j++) {
-                aabbs.back().extend(x.segment<3>(3*F(i,j)));
-            }
-
-            aabbs.back().extend(aabbs.back().min() - Eigen::Vector3d::Ones() * h);
-            aabbs.back().extend(aabbs.back().max() + Eigen::Vector3d::Ones() * h);
+            leaves[i].data_index = i + 1;
+            leaves[i].extend(x, F.row(i));
+            leaves[i].extendK(leaves[i].min() - BV::VectorK::Constant(h));
+            leaves[i].extendK(leaves[i].max() + BV::VectorK::Constant(h));
         }
 
-        build(0, aabbs, idxs);
+        build(0, leaves);
 
         // Assign each vertex to a "representative triangle". It can only belong
         // to one
@@ -81,49 +68,68 @@ public:
         }
     }
 
-    void build(int idx, const AABB_Vector& aabbs, const std::vector<int>& idxs, int h=0) {
+    void build(int idx, const std::vector<BV>& leaves) {
         if (idx >= bvs_.size()) std::cout << "uh-oh!!! " << idx << std::endl;
 
-        // -1 = inactive node, 0 = internal, > 0 = leaf
-        bvs_[idx].data_index = idxs.size() == 1 ? idxs.front() + 1 : 0;
-
-        // Step 1: Construct a BV around all idxs at the requested index
-        bvs_[idx].aabb.setEmpty();
-        for (int i : idxs) {
-            bvs_[idx].aabb.extend(aabbs[i]);
-        }
-
         // Leaf node? Don't recurse anymore
-        if (idxs.size() == 1) {
+        if (leaves.size() == 1) {
+            bvs_[idx] = leaves.front();
             return;
         }
 
+        bvs_[idx].data_index = 0; // 0 => internal node
 
-        // Step 2: Split idxs up into lists
-        //auto sizes = bvs_[idx].sizes();
-        //size_t split_idx = *std::max_element(sizes.data(), sizes.data()+3);
-
-        // TODO: Redo this...
-        std::vector<int>  left_idxs;
-        std::vector<int> right_idxs;
-
-        for (size_t i=0; i<idxs.size()/2; i++) {
-            left_idxs.push_back(idxs[i]);
-        }
-        for (size_t i=idxs.size()/2; i<idxs.size(); i++) {
-            right_idxs.push_back(idxs[i]);
+        // Step 1: Construct a BV around all leaves at the requested index
+        bvs_[idx].setEmpty();
+        for (const BV& leaf : leaves) {
+            bvs_[idx].extend(leaf);
         }
 
+
+        // Step 2: Split leaves up into lists
+        // TODO: Make the "short" side on the right, then we can resize bvs_
+        // and reclaim some space
+        int split_idx;
+        (bvs_[idx].max() - bvs_[idx].min()).maxCoeff(&split_idx);
+
+        std::vector<std::pair<double, int>> vals;
+        for (int i=0; i<leaves.size(); i++) {
+            // Sort by midpoint
+            const double mid = (leaves[i].min()[split_idx] + leaves[i].max()[split_idx]) * 0.5;
+            vals.push_back({ mid, i });
+        }
+
+        std::sort(vals.begin(), vals.end(),
+                [](const auto& p1, const auto& p2) { return p1.first < p2.first; });
+
+        std::vector<BV> split_idxs[N];
+        for (int i=0; i<N; i++) {
+            for (int j=i*(leaves.size()/N); j<(i+1)*(leaves.size()/N); j++) {
+                split_idxs[i].push_back(leaves[vals[j].second]);
+            }
+        }
+        
         // Step 3: Recursively construct hierarchy
-        if (!left_idxs.empty())
-            build(2 * idx + 1, aabbs, left_idxs, h+1);
-
-        if (!right_idxs.empty())
-            build(2 * idx + 2, aabbs, right_idxs, h+1);
+        for (size_t i=0; i<N; i++) {
+            if (!split_idxs[i].empty()) {
+                build(get_child_index(idx, i), split_idxs[i]);
+            }
+        }
+    }
+ 
+    void refit(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h) {
+        for (int l=0; l<height_; l++) {
+            // The nodes at depth l are N^l-1 through N^(l+1)-1, and
+            // can all be refitted in parallel
+            #pragma omp parallel for
+            for (int i=std::pow(N, l) - 1; i<std::pow(N, l+1) - 1; i++) {
+                refit_node(i, F, x, h);
+            }
+        }
     }
 
-    template <typename F>
-    void visit(const Eigen::Vector3d& pt, F func) const {
+    template <typename Derived, typename F>
+    void visit(const Eigen::MatrixBase<Derived>& pt, F func) const {
         std::stack<int> q;
         q.push(0); // Start with root node
 
@@ -131,15 +137,15 @@ public:
             int idx = q.top();
             q.pop();
 
-            if (bvs_[idx].aabb.contains(pt)) {
+            if (bvs_[idx].contains(pt)) {
                 // Leaf node?
                 if (bvs_[idx].data_index > 0) {
                     func(bvs_[idx].data_index - 1);
                 }
                 // Valid node?
                 else if (bvs_[idx].data_index != -1) {
-                    for (int i=0; i<2; i++) {
-                        q.push(2 * idx + 1 + i);
+                    for (int i=0; i<N; i++) {
+                        q.push(get_child_index(idx, i));
                     }
                 }
             }
@@ -148,14 +154,17 @@ public:
 
     template <typename F>
     void self_intersect(F f) const {
+        auto go = [&](int i1, int i2) {
+
         std::stack<std::pair<int, int>> s;
-        s.push({ 0, 0 });
+        s.push({ i1, i2 });
+        //s.push({ 0, 0 });
 
         while (!s.empty()) {
             auto idxs = s.top();
             s.pop();
 
-            if (bvs_[idxs.first].aabb.intersects(bvs_[idxs.second].aabb)) {
+            if (bvs_[idxs.first].intersects(bvs_[idxs.second])) {
                 int d1 = bvs_[idxs.first].data_index;
                 int d2 = bvs_[idxs.second].data_index;
 
@@ -163,7 +172,7 @@ public:
                     // Both leaf nodes
                     for (int i=0; i<3; i++) {
                         if (rep_tri_vertices_[d1-1][i] != -1) {
-                            f(rep_tri_vertices_[d1-1][i], d2);
+                            f(rep_tri_vertices_[d1-1][i], d2-1);
                         }
                         if (rep_tri_vertices_[d2-1][i] != -1) {
                             f(rep_tri_vertices_[d2-1][i], d1-1);
@@ -172,122 +181,68 @@ public:
                 } else if (d1 > 0 && d2 != -1) {
                     // First is leaf node, other is internal,
                     // so just descend down the second
-                    for (int i=0; i<2; i++) {
-                        s.push({ idxs.first, 2 * idxs.second + 1 + i });
+                    for (int i=0; i<N; i++) {
+                        s.push({ idxs.first, get_child_index(idxs.second, i) });
                     }
                 } else if (d1 != -1 && d2 > 0) {
                     // First is internal node, other is leaf,
                     // so just descend down the first
-                    for (int i=0; i<2; i++) {
-                        s.push({ 2 * idxs.first + 1 + i, idxs.second });
+                    for (int i=0; i<N; i++) {
+                        s.push({ get_child_index(idxs.first, i), idxs.second });
                     }
                 } else if (d1 != -1 && d2 != -1) {
                     // Both internal nodes, intersect children pairs
-                    for (int i=0; i<2; i++) {
-                        for (int j=0; j<2; j++) {
-                            s.push({ 2 * idxs.first + 1 + i, 2 * idxs.second + 1 + j });
+                    for (int i=0; i<N; i++) {
+                        for (int j=(idxs.first == idxs.second ? i : 0); j<N; j++) {
+                            s.push({ get_child_index(idxs.first, i), get_child_index(idxs.second, j) });
                         }
                     }
                 }
             }
         }
+        };
+
+        std::array<std::pair<int, int>, N*N> pairs;
+        for (size_t i=0; i<N; i++) {
+            for (size_t j=0; j<N; j++) {
+                pairs[i*N+j] = std::make_pair(1+i, 1+j);
+            }
+        }
+
+        #pragma omp parallel for
+        for (size_t i=0; i<pairs.size(); i++) {
+            go(pairs[i].first, pairs[i].second);
+        }
     }
-    
-    void refit(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h) {
-
-        // Find first leaf node
-        auto it = std::find_if(bvs_.begin(), bvs_.end(),
-                                [&](const BV& bv) {
-                                    return bv.data_index > 0;
-                                });
-
-        if (it == bvs_.end()) {
+   
+protected:
+    void refit_node(int idx, const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h) {
+        if (bvs_[idx].data_index == -1) {
             return;
         }
 
-        size_t first_leaf = std::distance(bvs_.begin(), it);
-
-        // Refit leaves in parallel
-        #pragma omp parallel for
-        for (size_t i=first_leaf; i<bvs_.size(); i++) {
-            refit(F, x, h, int(i));
-        }
-
-        // Not in parallel, refit internal nodes. make sure we skip
-        // leaf nodes when we recurse down to them
-        refit_internal_nodes();
-    }
-
-    bool refit(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h, int idx) {
-        if (bvs_[idx].data_index == -1) {
-            return false;
-        }
-
-        bvs_[idx].aabb.setEmpty();
+        bvs_[idx].setEmpty();
 
         if (bvs_[idx].data_index > 0) {
             // Refit around face (data_index-1)
-            for (int i=0; i<3; i++) {
-                bvs_[idx].aabb.extend(x.segment<3>(3*F(bvs_[idx].data_index-1,i)));
-            }
-
-            bvs_[idx].aabb.extend(bvs_[idx].aabb.min() - Eigen::Vector3d::Constant(h));
-            bvs_[idx].aabb.extend(bvs_[idx].aabb.max() + Eigen::Vector3d::Constant(h));
+            bvs_[idx].extend(x, F.row(bvs_[idx].data_index-1));
+            bvs_[idx].extendK(bvs_[idx].min() - BV::VectorK::Constant(h));
+            bvs_[idx].extendK(bvs_[idx].max() + BV::VectorK::Constant(h));
         } else {
-            for (int i=0; i<2; ++i) {
-                if (refit(F, x, h, 2 * idx + 1 + i)) {
-                    bvs_[idx].aabb.extend(bvs_[2*idx+1+i].aabb);
+            // Internal node. Refit around children
+            for (int i=0; i<N; ++i) {
+                if (bvs_[get_child_index(idx, i)].data_index != -1) {
+                    bvs_[idx].extend(bvs_[get_child_index(idx, i)]);
                 }
             }
         }
-
-        return true;
     }
 
-protected:
-    bool refit_internal_nodes(int idx=0) {
-        if (bvs_[idx].data_index == -1) {
-            return false;
-        }
-
-        if (bvs_[idx].data_index > 0) {
-            return true;
-        }
-
-        bvs_[idx].aabb.setEmpty();
-
-        for (int i=0; i<2; ++i) {
-            if (refit_internal_nodes(2 * idx + 1 + i)) {
-                bvs_[idx].aabb.extend(bvs_[2*idx+1+i].aabb);
-            }
-        }
-
-        return true;
-    }
-
-    /*
-    void refit_leaf_node(const Eigen::MatrixXi& F,
-                         const Eigen::VectorXd& x,
-                         double h, BV& bv) {
-        bv.aabb.setEmpty();
-        for (int i=0; i<3; i++) {
-            bv.aabb.extend(x.segment<3>(3 * F(bv.data_index-1,i)));
-        }
-
-        bv.aabb.extend(bv.aabb.min() - Eigen::Vector3d::Ones() * h);
-        bv.aabb.extend(bv.aabb.max() + Eigen::Vector3d::Ones() * h);
-    }
-
-    void refit_internal_node(int idx, BV& bv) {
-        bv.aabb.setEmpty();
-        for (int i=0; i<2; i++) {
-            bv.aabb.extend(bvs_[2*idx+1+i].aabb);
-        }
-    }
-    */
+    int get_child_index(int idx, int child) const { return N*idx+child+1; }
 
 protected:
     std::vector<BV> bvs_;
+    double height_ = 0;
 
     std::vector<std::array<int, 3>> rep_tri_vertices_;
 };

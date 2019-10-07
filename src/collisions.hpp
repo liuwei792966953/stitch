@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <igl/barycentric_coordinates.h>
+
 #include "bvh.hpp"
 #include "mesh.hpp"
 
@@ -44,11 +46,8 @@ namespace Collisions {
                                              avatar.x.segment<3>(3*avatar.f(idx,0))).normalized();
 
                         double dist = (x.segment<3>(3*i) - avatar.x.segment<3>(3*avatar.f(idx,0))).dot(n);
-                        //if (dist > offset) {
-                        //    cs[i].dx = dist;
-                        //    cs[i].tri_idx = -1;
-                        //}
-                        if (dist < cs[i].dx) {// && dist > -0.5 && cs[i].dx < 1.1 * offset) {
+
+                        if (dist < cs[i].dx && dist > -2.5) {
                             cs[i].dx = dist;
                             cs[i].tri_idx = idx;
                             cs[i].n = n;
