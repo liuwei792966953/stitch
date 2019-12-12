@@ -40,15 +40,6 @@ public:
         return *this;
     }
 
-    template<typename DerivedA, typename DerivedB>
-    kDOP& extend(const Eigen::MatrixBase<DerivedA>& x,
-                 const Eigen::MatrixBase<DerivedB>& idxs) {
-        for (int i=0; i<idxs.size(); i++) {
-            extend(x.template segment<3>(3*idxs[i]));
-        }
-        return *this;
-    }
-
     template<typename Derived>
     bool contains(const Eigen::MatrixBase<Derived>& p) const {
         VectorK p_proj = project(p);

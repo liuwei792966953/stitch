@@ -51,12 +51,14 @@ class StitchSpringEnergy : public BaseEnergy
 public:
     StitchSpringEnergy(double ks, double kd) : ks_(ks), kd_(kd) {}
 
-    void precompute(const TriMesh& mesh) { }
+    void precompute(const TriMesh& mesh) override {
+        lambda_ = VecXd::Zero(mesh.s.rows());
+    }
 
     void getForceAndHessian(const TriMesh& mesh, const VecXd& x,
 				VecXd& F,
 				SparseMatrixd& dFdx,
-				SparseMatrixd& dFdv) const {
+				SparseMatrixd& dFdv) const override {
 
 	const double ks = ks_ * std::min(10.0, std::pow(1.1, iteration++));
 
@@ -89,7 +91,7 @@ public:
         }
     }
 
-    void getHessianPattern(const TriMesh& mesh, std::vector<SparseTripletd>& triplets) const {
+    void getHessianPattern(const TriMesh& mesh, std::vector<SparseTripletd>& triplets) const override {
         for (int i=0; i<mesh.s.rows(); i++) {
             const int i0 = mesh.s(i,0);
             const int i1 = mesh.s(i,1);
@@ -104,11 +106,91 @@ public:
             }
         }
     }
-   
+
+    void perVertexCount(const TriMesh& mesh,
+                        std::vector<int>& counts) const override {
+        for (int i=0; i<mesh.s.rows(); i++) {
+            for (int j=0; j<2; j++) {
+                counts[mesh.s(i,j)]++;
+            }
+        }
+    }
+      
 protected:
-    const Real ks_;
-    const Real kd_;
+    const double ks_;
+    const double kd_;
 
     mutable int iteration = 0;
 };
 
+
+template <typename MeshT>
+struct StitchSpring
+{
+    using ElementT = typename MeshT::Stitch;
+
+    static constexpr int dim = 1;
+
+    static int n_constraints() { return 1; }
+
+    static typename MeshT::Real ks(const MeshT& mesh, typename ElementT::iterator it) {
+        return mesh.stitch_ks(it);
+    }
+    
+    static typename MeshT::Real kd(const MeshT& mesh, typename ElementT::iterator it) {
+        return mesh.stitch_kd(it);
+    }
+
+    template <typename DerivedA, typename DerivedB, typename DerivedC, typename DerivedD>
+    static void project(const Eigen::MatrixBase<DerivedA>& u0, 
+                 const Eigen::MatrixBase<DerivedA>& u1,
+                 const Eigen::MatrixBase<DerivedB>& x0,
+                 const Eigen::MatrixBase<DerivedB>& x1,
+                 Eigen::MatrixBase<DerivedC>& C,
+                 Eigen::MatrixBase<DerivedD>& dC0,
+                 Eigen::MatrixBase<DerivedD>& dC1)
+    {
+        auto n = x1 - x0;
+        const auto l = n.norm();
+
+        dC1 =  n;
+        dC0 = -n;
+        if (l > 1.0e-8) {
+            dC1 /= l;
+            dC0 /= l;
+        }
+        
+        C[0] = l;
+    }
+
+    /*
+    void project(const TriMesh& mesh, const VecXd& x, double dt, VecXd& dx) {
+	//const double ks = ks_ * std::min(10.0, std::pow(1.1, iteration++));
+
+	double a = 1.0 / ks_;
+	a /= dt * dt;
+
+	const double b = dt * dt * kd_;
+	const double c = a * b / dt;
+
+        for (int i=0; i<mesh.s.rows(); i++) {
+            const int i0 = mesh.s(i,0);
+            const int i1 = mesh.s(i,1);
+
+            Vec3d n = mesh.x.segment<3>(3*i1) - mesh.x.segment<3>(3*i0);// +
+                          //dx.segment<3>(3*i1) - dx.segment<3>(3*i0); // Jacobi
+            const double l = n.norm();
+            if (l > 1.0e-8) {
+                n /= l;
+            }
+
+            double dl = (-l - lambda_[i] * a - c * (n.dot(x.segment<3>(3*i1) - mesh.x.segment<3>(3*i1)) - n.dot(x.segment<3>(3*i0) - mesh.x.segment<3>(3*i0)))) / ((1.0 + c) * (1.0 / mesh.m[3*i0] + 1.0 / mesh.m[3*i1]) + a);
+	    lambda_[i] += dl;
+
+            dx.segment<3>(3*i0) -= n * dl / mesh.m[3*i0];
+            dx.segment<3>(3*i1) += n * dl / mesh.m[3*i1];
+        }
+    }
+    */
+
+};

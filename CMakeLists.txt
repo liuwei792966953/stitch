@@ -25,23 +25,25 @@ find_package(GLFW 3 REQUIRED)
 
 include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories("../../Libraries/libigl/include") # TODO: Make this legit
-include_directories(SYSTEM ${GLFW_INCLUDE_DIR})
+include_directories(include)
 
-#include_directories(SYSTEM ${OPENGL_INCLUDE_DIR})
-#include_directories(${OPENMESH_INCLUDE_DIR})
+add_subdirectory(apps)
 
-include_directories(glad/include)
-include_directories(deps/clara/include)
-include_directories(src)
 
 set(SOURCES
-    glad/src/glad.c
-    src/hinge_energy.cpp
-    src/triangle_energies.cpp
     src/admm_integrator.cpp
-    src/view.cpp)
+    src/backward_euler_integrator.cpp
+    src/hinge_energy.cpp
+    src/immediate_buckling_energy.cpp
+    src/linear_elastic_energy.cpp
+    src/nonlinear_elastic_energy.cpp
+    src/self_collision_energy.cpp
+    src/stitch_energy.cpp
+    src/triangle_energies.cpp
+)
 
-add_executable(stitch ${SOURCES})
+add_library(stitch STATIC ${SOURCES})
+
 
 if(MSVC)
 	target_compile_definitions(stitch PRIVATE _USE_MATH_DEFINES)
@@ -49,4 +51,3 @@ if(MSVC)
 endif(MSVC)
 
 #target_link_libraries(stitch ${OPENMESH_CORE_LIBRARY})
-target_link_libraries(stitch ${GLFW_LIBRARIES} "-L/usr/local/lib")

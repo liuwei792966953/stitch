@@ -17,14 +17,18 @@ public:
     NonlinearElasticEnergy(NonlinearElasticEnergy&&) = default;
     NonlinearElasticEnergy& operator=(const NonlinearElasticEnergy&) = default;
 
-    void precompute(const TriMesh& mesh);
+    void precompute(const TriMesh& mesh) override;
 
     void getForceAndHessian(const TriMesh& mesh, const VecXd& x,
 				VecXd& F,
 				SparseMatrixd& dFdx,
-				SparseMatrixd& dFdv) const;
+				SparseMatrixd& dFdv) const override;
 
-    void getHessianPattern(const TriMesh& mesh, std::vector<SparseTripletd> &triplets) const;
+    void getHessianPattern(const TriMesh& mesh, std::vector<SparseTripletd> &triplets) const override;
+
+    size_t nbrEnergies(const TriMesh& mesh) const override { return mesh.e.rows(); }
+
+    void update(const TriMesh& mesh, const VecXd& x, double dt, VecXd& dx) override;
 
 protected:
     Mat2d clampMatrixEigenvalues(Mat2d &input) const;
@@ -32,8 +36,8 @@ protected:
 protected:
     struct PrecomputedTriangleElement
     {
-        Real A;
-        Real edgeLengths[2];
+        double A;
+        double edgeLengths[2];
         Mat2d DmInverse;
         Mat2x3d Bm;
 
@@ -43,6 +47,7 @@ protected:
     };
 
     std::vector<PrecomputedTriangleElement> elements_;
+    std::vector<double> L_;
 
     double ksx_;
     double ksy_;

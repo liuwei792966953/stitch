@@ -35,13 +35,15 @@ public:
         // (some nodes will be inactive)
         height_ = std::ceil(std::log(F.rows()) / std::log(N)) + 1;
         bvs_.resize(std::pow(N, height_) - 1);
-        std::cout << F.rows() << "; " << bvs_.size() << std::endl;
+        std::cout << F.rows() << "; " << bvs_.size() << "; " << height_ << std::endl;
 
         // To begin, construct a BV around all faces, then recurse down
         std::vector<BV> leaves(F.rows());
         for (int i=0; i<F.rows(); i++) {
             leaves[i].data_index = i + 1;
-            leaves[i].extend(x, F.row(i));
+            for (int j=0; j<3; j++) {
+                leaves[i].extend(x.segment<3>(3*F(i,j)));
+            }
             leaves[i].extendK(leaves[i].min() - BV::VectorK::Constant(h));
             leaves[i].extendK(leaves[i].max() + BV::VectorK::Constant(h));
         }
@@ -54,21 +56,19 @@ public:
 
         rep_tri_vertices_.resize(F.rows(), { -1, -1, -1 }); 
         for (int i=0; i<F.rows(); i++) {
+            // Find first available slot for this face
+            size_t idx = 0;
             for (int j=0; j<3; j++) {
-                if (!assigned.count(F(i,j))) {
-                    // Find first available slot
-                    size_t idx = std::distance(rep_tri_vertices_[i].begin(),
-                            std::find(rep_tri_vertices_[i].begin(),
-                                      rep_tri_vertices_[i].end(), -1));
-
-                    rep_tri_vertices_[i][idx] = F(i,j);
-                    assigned.insert(F(i,j));
+                int vidx = F(i,j);
+                if (!assigned.count(vidx)) {
+                    rep_tri_vertices_[i][idx++] = vidx;
+                    assigned.insert(vidx);
                 }
             }
         }
     }
 
-    void build(int idx, const std::vector<BV>& leaves) {
+    void build(int idx, const std::vector<BV>& leaves, int height=0) {
         if (idx >= bvs_.size()) std::cout << "uh-oh!!! " << idx << std::endl;
 
         // Leaf node? Don't recurse anymore
@@ -103,21 +103,50 @@ public:
                 [](const auto& p1, const auto& p2) { return p1.first < p2.first; });
 
         std::vector<BV> split_idxs[N];
+
+        const size_t group_size = int(std::ceil(double(leaves.size()) / double(N)));
         for (int i=0; i<N; i++) {
-            for (int j=i*(leaves.size()/N); j<(i+1)*(leaves.size()/N); j++) {
+            for (size_t j=i*group_size; j<std::min(leaves.size(), (i+1)*group_size); j++) {
                 split_idxs[i].push_back(leaves[vals[j].second]);
             }
         }
+
+        if ((height % 2) != 0) { std::swap(split_idxs[0], split_idxs[1]); }
         
         // Step 3: Recursively construct hierarchy
         for (size_t i=0; i<N; i++) {
             if (!split_idxs[i].empty()) {
-                build(get_child_index(idx, i), split_idxs[i]);
+                build(get_child_index(idx, i), split_idxs[i], height+1);
             }
         }
     }
  
     void refit(const Eigen::MatrixXi& F, const Eigen::VectorXd& x, double h) {
+        /*
+        size_t idx = bvs_.size() - 1;
+        for (auto it=bvs_.rbegin(); it!=bvs_.rend(); ++it) {
+            if (it->data_index != -1) {
+                it->setEmpty();
+
+                if (it->data_index > 0) {
+                    // Refit around face (data_index-1)
+                    for (int j=0; j<3; j++) {
+                        it->extend(x.segment<3>(3*F(it->data_index-1,j)));
+                    }
+                    it->extendK(it->min() - BV::VectorK::Constant(h));
+                    it->extendK(it->max() + BV::VectorK::Constant(h));
+                } else {
+                    // Internal node. Refit around children
+                    for (int i=0; i<N; ++i) {
+                        if (bvs_[get_child_index(idx, i)].data_index != -1) {
+                            it->extend(bvs_[get_child_index(idx, i)]);
+                        }
+                    }
+                }
+            }
+            idx--;
+        }
+        */
         for (int l=0; l<height_; l++) {
             // The nodes at depth l are N^l-1 through N^(l+1)-1, and
             // can all be refitted in parallel
@@ -153,7 +182,7 @@ public:
     }
 
     template <typename F>
-    void self_intersect(F f) const {
+    void self_intersect(const Eigen::MatrixXi& faces, F f) const {
         auto go = [&](int i1, int i2) {
 
         std::stack<std::pair<int, int>> s;
@@ -225,7 +254,9 @@ protected:
 
         if (bvs_[idx].data_index > 0) {
             // Refit around face (data_index-1)
-            bvs_[idx].extend(x, F.row(bvs_[idx].data_index-1));
+            for (int j=0; j<3; j++) {
+                bvs_[idx].extend(x.segment<3>(3*F(bvs_[idx].data_index-1, j)));
+            }
             bvs_[idx].extendK(bvs_[idx].min() - BV::VectorK::Constant(h));
             bvs_[idx].extendK(bvs_[idx].max() + BV::VectorK::Constant(h));
         } else {

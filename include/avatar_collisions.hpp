@@ -215,6 +215,65 @@ public:
         }
     }
 
+    size_t nbrEnergies(const TriMesh& mesh) const { return mesh.x.size() / 3; }
+
+    void update(const TriMesh& mesh,
+                const VecXd& x, 
+                 const AnimatedMesh& avatar,
+                 const std::vector<Collision>& cs,
+                 double offset, double dt,
+                 VecXd& dx) {
+
+        const int n_verts = mesh.x.size() / 3;
+
+        if (lambda_.size() != n_verts) {
+            lambda_ = VecXd::Zero(n_verts);
+        }
+
+        const double a = (1.0 / ks_) / (dt * dt);
+
+	const double b = dt * dt * kd_;
+	const double c = a * b / dt;
+
+        #pragma omp parallel for
+        for (int i=0; i<n_verts; i++) {
+            if (cs[i].tri_idx != -1 && cs[i].dx < offset) {
+                const Eigen::Vector3d& n = cs[i].n;
+
+                const double C = (x.segment<3>(3*i) - avatar.x.segment<3>(3*avatar.f(cs[i].tri_idx,0))).dot(n) - offset;
+
+                double dl = (-C - a * lambda_[i] - c * n.dot(x.segment<3>(3*i) - mesh.x.segment<3>(3*i))) / (1.0 / mesh.m[3*i] + a);
+                dx.segment<3>(3*i) += n * dl / mesh.m[3*i];
+
+                lambda_[i] += dl;
+            }
+        }
+    }
+
+    void reset() { lambda_.setZero(); }
+
+    void friction(const TriMesh& mesh,
+                  const std::vector<Collision>& cs,
+                  double mu,
+                  VecXd& x) const {
+        const int n_verts = mesh.x.size() / 3;
+
+        // Follow Coulomb's Law: dx_t <= mu * dx_n,
+        #pragma omp parallel for
+        for (int i=0; i<n_verts; i++) {
+            if (cs[i].tri_idx != -1) {
+                const Vec3d dx = x.segment<3>(3*i) - mesh.x.segment<3>(3*i);
+                
+                const double dx_n = dx.dot(cs[i].n);
+                Vec3d dx_ortho = dx - cs[i].n * dx.dot(cs[i].n);
+
+                const double dx_t = std::min(dx_ortho.norm(), mu * std::fabs(dx_n));
+
+                x.segment<3>(3*i) -= dx_ortho.normalized() * dx_t;
+            }
+        }
+    }
+
 protected:
     const double ks_ = 1.0e6;
     const double kd_ = 10.0;
@@ -222,4 +281,6 @@ protected:
     std::vector<bool> was_previously_colliding_;
     
     std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> spring_anchors_;
+
+    VecXd lambda_;
 };

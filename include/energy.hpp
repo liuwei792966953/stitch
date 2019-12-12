@@ -24,8 +24,6 @@ using MatXd = Eigen::MatrixXd;
 using Mat2x3d = Eigen::Matrix<double, 2, 3>;
 using Mat3x2d = Eigen::Matrix<double, 3, 2>;
 
-using Real = double;
-
 
 // Abstract interface to define an energy term
 class Energy {
@@ -75,4 +73,17 @@ public:
 
     virtual void getHessianPattern(const TriMesh& mesh,
                                    std::vector<SparseTripletd> &triplets) const = 0;
+
+
+    // XPBD
+    virtual size_t nbrEnergies(const TriMesh& mesh) const { return 0; }
+
+    virtual void perVertexCount(const TriMesh& mesh, std::vector<int>& counts) const { }
+
+    virtual void update(const TriMesh& mesh, const VecXd& x, double dt, VecXd& dx) { }
+    
+    void reset() { lambda_.setZero(); }
+
+protected:
+    VecXd lambda_; // For XPBD
 };

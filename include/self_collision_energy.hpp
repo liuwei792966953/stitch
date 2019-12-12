@@ -109,7 +109,7 @@ public:
 
         std::mutex collision_mutex;
 
-        mesh.bvh.self_intersect([&](int v, int f) {
+        mesh.bvh.self_intersect(mesh.f, [&](int v, int f) {
                 if (mesh.f(f,0) == v ||
                     mesh.f(f,1) == v ||
                     mesh.f(f,2) == v) {
@@ -196,8 +196,64 @@ public:
         }
     }
 
+    void reset(size_t nbr) { lambda_.resize(nbr); lambda_.setZero(); }
+
+    void update(const TriMesh& mesh,
+                const std::vector<std::pair<int,int>>& vf_pairs,
+                std::vector<int>& constraints_per_vertex,
+                const VecXd& x, double dt, double h, VecXd& dx) {
+
+        const double a = (1.0 / ks_) / (dt * dt);
+
+        int idx=0;
+
+        for (const auto& vf_pair : vf_pairs) {
+            const int v = vf_pair.first;
+            const int f = vf_pair.second;
+
+            Eigen::Vector3d w;
+            if (Collisions::get_barycentric_weights(x.segment<3>(3*v),
+                                                    x.segment<3>(3*mesh.f(f,0)),
+                                                    x.segment<3>(3*mesh.f(f,1)),
+                                                    x.segment<3>(3*mesh.f(f,2)), w)) {
+                Vec3d n = mesh.fn.segment<3>(3*f);
+
+                bool flipped = mesh.fl[f] > mesh.vl[v];
+                if (mesh.fl[f] > mesh.vl[v]) {
+                    n *= -1.0;
+                }
+
+                double d = (x.segment<3>(3*v) -
+                            x.segment<3>(3*mesh.f(f,0))).dot(n);
+                if (d < h && d > -2.5 && n.dot(mesh.vn.segment<3>(3*v)) > 0.0) {
+                    double den = 1.0 / mesh.m[3*v];
+                    constraints_per_vertex[v]++;
+
+                    for (int i=0; i<3; i++) {
+                        constraints_per_vertex[mesh.f(f,i)]++;
+                        den += 1.0 / mesh.m[mesh.f(f,i)];
+                    }
+
+                    den += a;
+
+                    // C = d - h 
+                    const double dl = (h - d - lambda_[idx] * a) / den;
+
+                    dx.segment<3>(3*v).noalias() += n * dl / mesh.m[3*v];
+                    for (int i=0; i<3; i++) {
+                        dx.segment<3>(3*mesh.f(f,i)).noalias() -= n * dl / mesh.m[3*mesh.f(f,i)];
+                    }
+
+                    lambda_[idx] += dl;
+                }
+            }
+
+            idx++;
+        }
+    }
+
 protected:
-    const double ks_ = 500.0;
+    const double ks_ = 1500.0;
     const double kd_ =   25.0;
 
     // TODO: Should be passed in

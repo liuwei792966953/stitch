@@ -2,17 +2,19 @@
 // This code distributed under zlib, see LICENSE.txt for terms.
 
 #include <clara.hpp>
-#include <igl/opengl/glfw/Viewer.h>
 
 #include "admm_integrator.hpp"
 #include "backward_euler_integrator.hpp"
 #include "energy.hpp"
 #include "hinge_energy.hpp"
 #include "immediate_buckling_energy.hpp"
+#include "linear_elastic_energy.hpp"
+#include "linear_spring_energy.hpp"
+#include "mesh.hpp"
 #include "nonlinear_elastic_energy.hpp"
 #include "stitch_energy.hpp"
 #include "triangle_energies.hpp"
-#include "mesh.hpp"
+#include "xpbd_integrator.hpp"
 
 #include "polyscope/curve_network.h"
 #include "polyscope/surface_mesh.h"
@@ -31,57 +33,23 @@ struct CLOptions {
 
     double density = 0.02;
     double friction = 0.0;
-    double ks_x = 1.0e4;
-    double ks_y = 1.0e4;
+    double ks_x = 1.0e6;
+    double ks_y = 1.0e6;
     double kb = 1.0;
-    double ks_stitch = 1.0e4;
+    double ks_stitch = 1.0e5;
     double kd_stitch = 1.5e2;
     double damping = 0.0;
     double dt = 1.0 / 30.0;
 
     int iterations = 10;
-    int integrator = 0; // 0 = ADMM, 1 = Backward Euler
+    int integrator = 2; // 0 = ADMM, 1 = Backward Euler, 2 = XPBD
 
     bool showhelp = false;
 };
 
 
 template <typename Integrator>
-bool step(igl::opengl::glfw::Viewer& viewer,
-          Integrator& integrator,
-          TriMesh& mesh,
-          AnimatedMesh& avatar,
-          double dt,
-          int iterations,
-          double kd,
-          double mu)
-{
-    if (viewer.core.is_animating) {
-        integrator.step(mesh, dt, iterations, kd, mu);
-
-        Eigen::MatrixXd V(mesh.x.size() / 3, 3);
-        for (int i=0; i<V.rows(); i++) {
-            V.row(i) = mesh.x.segment<3>(3*i);
-        }
-
-        viewer.data_list[mesh.idx].set_vertices(V);
-
-        if (avatar.x.size()) {
-            V = Eigen::MatrixXd(avatar.x.size() / 3, 3);
-            for (int i=0; i<V.rows(); i++) {
-                V.row(i) = avatar.x.segment<3>(3*i);
-            }
-        
-            viewer.data_list[avatar.idx].set_vertices(V);
-        }
-    }
-
-    return false;
-}
-
-template <typename Integrator>
-void update(Integrator& integrator,
-        TriMesh& mesh,
+void update(SimMesh& mesh,
           AnimatedMesh& avatar,
           double dt,
           int iterations,
@@ -95,35 +63,39 @@ void update(Integrator& integrator,
     }
 
     if (is_running) {
-        integrator.step(mesh, dt, iterations, kd, mu);
+        avatar.next_frame(dt);
 
-        Eigen::MatrixXd V(mesh.x.size() / 3, 3);
+        struct XPBD_Options {
+            double dt_;
+            double dt() const { return dt_; }
+        };
+        XPBD_Options opts{ dt };
+
+        Integrator::template step<SimMesh,AnimatedMesh,XPBD_Options,LinearElasticity<SimMesh>,ImmediateBucklingModel<SimMesh>,StitchSpring<SimMesh>>(mesh, avatar, opts);
+        //Integrator::template step<SimMesh,AnimatedMesh,XPBD_Options,LinearSpring<SimMesh>,ImmediateBucklingModel<SimMesh>,StitchSpring<SimMesh>>(mesh, avatar, opts);
+
+        Eigen::MatrixXd V(mesh.tri_mesh().x.size() / 3, 3);
         for (int i=0; i<V.rows(); i++) {
-            V.row(i) = mesh.x.segment<3>(3*i);
+            V.row(i) = mesh.tri_mesh().x.segment<3>(3*i);
         }
 
-        Eigen::MatrixXd Vs(2*mesh.s.rows(), 3);
-        for (int i=0; i<mesh.s.rows(); i++) {
+        Eigen::MatrixXd Vs(2*mesh.tri_mesh().s.rows(), 3);
+        for (int i=0; i<mesh.tri_mesh().s.rows(); i++) {
             for (int j=0; j<2; j++) {
-                Vs.row(2*i+j) = V.row(mesh.s(i,j));
+                Vs.row(2*i+j) = V.row(mesh.tri_mesh().s(i,j));
             }
         }
 
         polyscope::getSurfaceMesh("cloth")->updateVertexPositions(V);
-        polyscope::getCurveNetwork("stitches")->updateNodePositions(Vs);
+
+        mesh.tri_mesh().color_flagged(Eigen::Vector3f(1.0f, 0.0f, 0.0f));
+        polyscope::getSurfaceMesh("cloth")->addVertexColorQuantity("color", mesh.tri_mesh().c);
+
+        //if (mesh.s.rows() != 0) {
+        //    polyscope::getCurveNetwork("stitches")->updateNodePositions(Vs);
+        //}
     }
 
-}
-
-bool key_down(igl::opengl::glfw::Viewer &viewer, unsigned char key, int mods)
-{
-  switch(key)
-  {
-    case ' ':
-      viewer.core.is_animating = !viewer.core.is_animating;
-      break;
-  }
-  return true;
 }
 
 int main(int argc, char *argv[])
@@ -201,44 +173,40 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    igl::opengl::glfw::Viewer viewer;
 
+    TriMesh cloth_mesh;
+    load_tri_mesh(options.mesh, cloth_mesh, true);
 
+    //if (cloth_mesh.has_uvs()) { cloth_mesh.vt *= 10.0; }
 
-    TriMesh sim_mesh;
-    load_tri_mesh(options.mesh, sim_mesh, true);
-
-    //if (sim_mesh.has_uvs()) { sim_mesh.vt *= 10.0; }
-
-    //for (int i=0; i<sim_mesh.x.size()/3; i++) {
-    //    sim_mesh.x[3*i+1] += 0.1 * double(rand() / double(RAND_MAX)) - 0.05;
+    //for (int i=0; i<cloth_mesh.x.size()/3; i++) {
+    //    cloth_mesh.x[3*i+1] += 0.1 * double(rand() / double(RAND_MAX)) - 0.05;
     //}
 
-    Eigen::MatrixXd V(sim_mesh.x.size() / 3, 3);
+    Eigen::MatrixXd V(cloth_mesh.x.size() / 3, 3);
     for (int i=0; i<V.rows(); i++) {
-        V.row(i) = sim_mesh.x.segment<3>(3*i);
+        V.row(i) = cloth_mesh.x.segment<3>(3*i);
     }
 
-    viewer.data().set_mesh(V, sim_mesh.f);
-    sim_mesh.idx = viewer.data_list.size() - 1;
+    cloth_mesh.idx = 0;
     
-    sim_mesh.bvh.init(sim_mesh.f, sim_mesh.x);
+    cloth_mesh.bvh.init(cloth_mesh.f, cloth_mesh.x);
 
-    sim_mesh.v = Eigen::VectorXd::Zero(sim_mesh.x.rows());
-    sim_mesh.m = Eigen::VectorXd::Zero(sim_mesh.x.rows());
+    cloth_mesh.v = Eigen::VectorXd::Zero(cloth_mesh.x.rows());
+    cloth_mesh.m = Eigen::VectorXd::Zero(cloth_mesh.x.rows());
 
-    sim_mesh.vl = Eigen::VectorXi::Ones(sim_mesh.x.rows() / 3);
-    sim_mesh.fl = Eigen::VectorXi::Ones(sim_mesh.f.rows());
+    cloth_mesh.vl = Eigen::VectorXi::Ones(cloth_mesh.x.rows() / 3);
+    cloth_mesh.fl = Eigen::VectorXi::Ones(cloth_mesh.f.rows());
 
-    sim_mesh.u = Eigen::VectorXd(2 * sim_mesh.x.size() / 3);
-    if (sim_mesh.has_uvs() && sim_mesh.vt.size()) {
-        for (int i=0; i<sim_mesh.x.size() / 3; i++) {
-            int idx = sim_mesh.uv_index(i);
+    cloth_mesh.u = Eigen::VectorXd(2 * cloth_mesh.x.size() / 3);
+    if (cloth_mesh.has_uvs() && cloth_mesh.vt.size()) {
+        for (int i=0; i<cloth_mesh.x.size() / 3; i++) {
+            int idx = cloth_mesh.uv_index(i);
             if (idx != -1) {
-                sim_mesh.u.segment<2>(2*i) = sim_mesh.vt.segment<2>(2*idx);
+                cloth_mesh.u.segment<2>(2*i) = cloth_mesh.vt.segment<2>(2*idx);
             } else {
                 std::cout << "Warning: Cannot find UV for index " << i << std::endl;
-                sim_mesh.u.segment<2>(2*i) = Eigen::Vector2d::Zero();
+                cloth_mesh.u.segment<2>(2*i) = Eigen::Vector2d::Zero();
             }
         }
     } else {
@@ -246,11 +214,11 @@ int main(int argc, char *argv[])
 
         // TODO: Do this in a general way
         size_t zero_index = 1;
-        for (int i=0; i<sim_mesh.x.size() / 3; i++) {
-            double* curr = sim_mesh.u.data() + 2 * i;
+        for (int i=0; i<cloth_mesh.x.size() / 3; i++) {
+            double* curr = cloth_mesh.u.data() + 2 * i;
             for (int j=0; j<3; j++) {
                 if (zero_index != j) {
-                    *curr = sim_mesh.x[3*i+j];
+                    *curr = cloth_mesh.x[3*i+j];
                     curr++;
                 }
             }
@@ -261,7 +229,7 @@ int main(int argc, char *argv[])
     std::unordered_set<int> visited;
     std::vector<std::vector<int>> pieces;
 
-    while (visited.size() != sim_mesh.x.size() / 3) {
+    while (visited.size() != cloth_mesh.x.size() / 3) {
         int start = 0;
         while (visited.count(start)) { start++; }
 
@@ -275,10 +243,10 @@ int main(int argc, char *argv[])
             int v = s.top(); s.pop();
 
             if (!visited.count(v)) {
-                for (int i=0; i<sim_mesh.e.rows(); i++) {
+                for (int i=0; i<cloth_mesh.e.rows(); i++) {
                     for (int j=0; j<2; j++) {
-                        if (sim_mesh.e(i,j) == v && !visited.count(sim_mesh.e(i,(j+1)%2))) {
-                            s.push(sim_mesh.e(i,(j+1)%2));
+                        if (cloth_mesh.e(i,j) == v && !visited.count(cloth_mesh.e(i,(j+1)%2))) {
+                            s.push(cloth_mesh.e(i,(j+1)%2));
                         }
                     }
                 }
@@ -292,17 +260,25 @@ int main(int argc, char *argv[])
     std::cout << "Found " << pieces.size() << " pieces." << std::endl;
     */
 
-    for (int i=0; i<sim_mesh.f.rows(); i++) {
-        Vec2d u = (sim_mesh.u.segment<2>(2*sim_mesh.f(i,1)) -
-                   sim_mesh.u.segment<2>(2*sim_mesh.f(i,0)));
-        Vec2d v = (sim_mesh.u.segment<2>(2*sim_mesh.f(i,2)) -
-                   sim_mesh.u.segment<2>(2*sim_mesh.f(i,0)));
-        const Real A = 0.5 * std::fabs(u[0] * v[1] - u[1] * v[0]);
+    for (int i=0; i<cloth_mesh.f.rows(); i++) {
+        Vec2d u = (cloth_mesh.u.segment<2>(2*cloth_mesh.f(i,1)) -
+                   cloth_mesh.u.segment<2>(2*cloth_mesh.f(i,0)));
+        Vec2d v = (cloth_mesh.u.segment<2>(2*cloth_mesh.f(i,2)) -
+                   cloth_mesh.u.segment<2>(2*cloth_mesh.f(i,0)));
+        const double A = 0.5 * std::fabs(u[0] * v[1] - u[1] * v[0]);
 
         for (int j=0; j<3; j++) {
-            sim_mesh.m.segment<3>(3*sim_mesh.f(i,j)) += Eigen::Vector3d::Ones() * A * options.density / 3.0;
+            cloth_mesh.m.segment<3>(3*cloth_mesh.f(i,j)) += Eigen::Vector3d::Ones() * A * options.density / 3.0;
         }
     }
+
+    cloth_mesh.fixed.insert(40);
+    cloth_mesh.fixed.insert(1680);
+    
+    cloth_mesh.m.segment<3>(3*40) = Eigen::Vector3d::Constant(1.0e10);
+    cloth_mesh.m.segment<3>(3*1680) = Eigen::Vector3d::Constant(1.0e10);
+
+    SimMesh sim_mesh(cloth_mesh);
 
 
     AnimatedMesh avatar;
@@ -315,11 +291,7 @@ int main(int argc, char *argv[])
             V.row(i) = avatar.x.segment<3>(3*i);
         }
 
-        Eigen::MatrixXd C = Eigen::MatrixXd::Constant(V.rows(), 3, 0.7);
-        viewer.append_mesh();
-        viewer.data().set_mesh(V, avatar.f);
-        viewer.data().set_colors(C);
-        avatar.idx = viewer.data_list.size() - 1;
+        avatar.idx = 1;
 
         avatar.bvh.init(avatar.f, avatar.x, 2.5);
 
@@ -355,17 +327,17 @@ int main(int argc, char *argv[])
 
                 int idx1, idx2;
                 str >> idx1 >> idx2;
-                if (idx1 < sim_mesh.x.size() / 3 &&
-                    idx2 < sim_mesh.x.size() / 3) {
+                if (idx1 < cloth_mesh.x.size() / 3 &&
+                    idx2 < cloth_mesh.x.size() / 3) {
                     s.push_back(idx1);
                     s.push_back(idx2);
                 }
             }
 
-            sim_mesh.s = Eigen::MatrixXi(s.size() / 2, 2);
-            for (int i=0; i<sim_mesh.s.rows(); i++) {
+            cloth_mesh.s = Eigen::MatrixXi(s.size() / 2, 2);
+            for (int i=0; i<cloth_mesh.s.rows(); i++) {
                 for (int j=0; j<2; j++) {
-                    sim_mesh.s(i,j) = s[2*i+j];
+                    cloth_mesh.s(i,j) = s[2*i+j];
                 }
             }
         }
@@ -381,16 +353,16 @@ int main(int argc, char *argv[])
                 int v0, v1, l;
                 str >> v0 >> v1 >> l;
                 for (int i=v0; i<=v1; i++) {
-                    sim_mesh.vl[i] = l;
+                    cloth_mesh.vl[i] = l;
                 }
             }
         }
 
         // For now, just assign the face layer as the highest layer of its vertices
-        for (int i=0; i<sim_mesh.f.rows(); i++) {
-            sim_mesh.fl[i] = std::max(std::max(sim_mesh.vl[sim_mesh.f(i,0)],
-                                               sim_mesh.vl[sim_mesh.f(i,1)]),
-                                               sim_mesh.vl[sim_mesh.f(i,2)]);
+        for (int i=0; i<cloth_mesh.f.rows(); i++) {
+            cloth_mesh.fl[i] = std::max(std::max(cloth_mesh.vl[cloth_mesh.f(i,0)],
+                                               cloth_mesh.vl[cloth_mesh.f(i,1)]),
+                                               cloth_mesh.vl[cloth_mesh.f(i,2)]);
         }
     }
 
@@ -416,7 +388,7 @@ int main(int argc, char *argv[])
     polyscope::view::windowHeight = 768;
 
     polyscope::init();
-    polyscope::registerSurfaceMesh("cloth", V, sim_mesh.f);
+    polyscope::registerSurfaceMesh("cloth", V, cloth_mesh.f);
     polyscope::getSurfaceMesh("cloth")->setShadeStyle(ShadeStyle::SMOOTH);
 
     if (avatar.v.size()) {
@@ -429,69 +401,22 @@ int main(int argc, char *argv[])
         polyscope::getSurfaceMesh("avatar")->setShadeStyle(ShadeStyle::SMOOTH);
     }
 
-    if (sim_mesh.s.rows()) {
-        Eigen::MatrixXd Vs(2*sim_mesh.s.rows(), 3);
+    /*
+    if (cloth_mesh.s.rows()) {
+        Eigen::MatrixXd Vs(2*cloth_mesh.s.rows(), 3);
         std::vector<std::array<size_t, 2>> Ss;
-        for (int i=0; i<sim_mesh.s.rows(); i++) {
+        for (int i=0; i<cloth_mesh.s.rows(); i++) {
             for (int j=0; j<2; j++) {
-                Vs.row(2*i+j) = V.row(sim_mesh.s(i,j));
+                Vs.row(2*i+j) = V.row(cloth_mesh.s(i,j));
             }
             Ss.push_back({ size_t(2*i), size_t(2*i+1) });
         }
         polyscope::registerCurveNetwork("stitches", Vs, Ss);
     }
+    */
 
-
-    if (options.integrator == 0) {
-        ADMM_Integrator admm;
-
-        if (avatar.x.size()) {
-            admm.addAvatar(avatar);
-        }
-
-        for (int i=0; i<sim_mesh.f.rows(); i++) {
-            std::vector<Eigen::Vector3d> xs;
-            for (int j=0; j<3; j++) {
-                if (sim_mesh.has_uvs()) {
-                    Eigen::Vector2d x = sim_mesh.vt.segment<2>(2*sim_mesh.uv_index(sim_mesh.f(i,j)));
-                    xs.push_back(Eigen::Vector3d(x[0], x[1], 0.0));
-                } else {
-                    xs.push_back(sim_mesh.x.segment<3>(3*sim_mesh.f(i,j)));
-                }
-            }
-            admm.energies.push_back(std::make_shared<TriangleOrthoStrain>(sim_mesh.f.row(i), xs,
-                        options.ks_x, options.ks_y));
-        }
-
-        auto bend_energies = get_edge_energies(sim_mesh, options.kb, angles, true);
-        for (auto& e : bend_energies) {
-            admm.energies.emplace_back(e);
-        }
-
-        for (int i=0; i<sim_mesh.s.rows(); i++) {
-            admm.energies.push_back(std::make_shared<StitchEnergy>(sim_mesh.s(i,0),
-                                                                   sim_mesh.s(i,1)));
-        }
-
-        /*
-        auto pre_draw = [&](igl::opengl::glfw::Viewer& viewer) -> bool {
-                                    return step(viewer,
-                                         admm,
-                                         sim_mesh,
-                                         avatar,
-                                         options.dt,
-                                         options.iterations,
-                                         options.damping,
-                                         options.friction);
-                                };
-
-        viewer.callback_key_down = &key_down;
-        viewer.callback_pre_draw = pre_draw;
-        viewer.launch();
-        */
-        
         auto callback = [&]() {
-                                    update(admm,
+                                    update<XPBD_Integrator>(
                                          sim_mesh,
                                          avatar,
                                          options.dt,
@@ -502,48 +427,6 @@ int main(int argc, char *argv[])
 
         polyscope::state::userCallback = callback;
         polyscope::show();
-
-    } else if (options.integrator == 1) {
-        BackwardEulerIntegrator be;
-        
-        if (avatar.x.size()) {
-            be.addAvatar(avatar);
-        }
-
-        be.energies.emplace_back(std::make_unique<NonlinearElasticEnergy>(options.ks_x, options.ks_y));
-        be.energies.emplace_back(std::make_unique<ImmediateBucklingEnergy>(options.kb));
-        be.energies.emplace_back(std::make_unique<StitchSpringEnergy>(options.ks_stitch, options.kd_stitch));
-
-        /*
-        auto pre_draw = [&](igl::opengl::glfw::Viewer& viewer) -> bool {
-                                    return step(viewer,
-                                         be,
-                                         sim_mesh,
-                                         avatar,
-                                         options.dt,
-                                         options.iterations,
-                                         options.damping,
-                                         options.friction);
-                                };
-
-        viewer.callback_key_down = &key_down;
-        viewer.callback_pre_draw = pre_draw;
-        viewer.launch();
-        */
-
-        auto callback = [&]() {
-                                    update(be,
-                                         sim_mesh,
-                                         avatar,
-                                         options.dt,
-                                         options.iterations,
-                                         options.damping,
-                                         options.friction);
-                                };
-
-        polyscope::state::userCallback = callback;
-        polyscope::show();
-    }
 
     return 0;
 }
